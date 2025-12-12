@@ -1,133 +1,173 @@
-// Axis & Allies (Lite) — data
-// This is a simplified, fan-made scenario with an abstract map.
-// No official map art or component scans are used.
+// Axis & Allies 1942.2 data contract
+// Defines global AA object with rules, map, units, and setup.
 
-const POWERS = {
-  "USSR": { side: "Allies", color: "#ef4444" },
-  "Germany": { side: "Axis", color: "#f59e0b" },
-  "UK": { side: "Allies", color: "#22c55e" },
-  "Japan": { side: "Axis", color: "#e11d48" },
-  "USA": { side: "Allies", color: "#60a5fa" },
-};
+window.AA = window.AA || {};
 
-const TURN_ORDER = ["USSR", "Germany", "UK", "Japan", "USA"];
+AA.rules = { edition: "1942.2" };
 
-const PHASES = [
-  "Purchase",
-  "Combat Move",
-  "Conduct Combat",
-  "Noncombat Move",
-  "Mobilize",
-  "Collect Income",
-];
-
-const UNIT_STATS = {
-  "inf": { name: "Infantry", cost: 3, atk: 1, def: 2, move: 1, domain: "land" },
-  "tank": { name: "Tank", cost: 5, atk: 3, def: 3, move: 2, domain: "land" },
-  "ftr": { name: "Fighter", cost: 10, atk: 3, def: 4, move: 4, domain: "air" },
-  "bmb": { name: "Bomber", cost: 12, atk: 4, def: 1, move: 6, domain: "air" },
-
-  "sub": { name: "Submarine", cost: 6, atk: 2, def: 2, move: 2, domain: "sea" },
-  "dd":  { name: "Destroyer", cost: 8, atk: 3, def: 3, move: 2, domain: "sea" },
-  "trn": { name: "Transport", cost: 7, atk: 0, def: 0, move: 2, domain: "sea", capacity: 2 },
-  "bb":  { name: "Battleship", cost: 20, atk: 4, def: 4, move: 2, domain: "sea", hp: 2 },
-  "cv":  { name: "Carrier", cost: 14, atk: 3, def: 3, move: 2, domain: "sea", airCap: 2 },
-};
-
-// Abstract territories + sea zones (rectangles on the canvas)
-const MAP = [
-  // Seas
-  { id:"ARCTIC", name:"Arctic Sea", type:"sea", ipc:0, x:40, y:40, w:1120, h:90, neighbors:["NPAC","NATL"] },
-  { id:"NPAC", name:"North Pacific", type:"sea", ipc:0, x:40, y:150, w:240, h:110, neighbors:["ARCTIC","CPAC","SOJ","US_W"] },
-  { id:"CPAC", name:"Central Pacific", type:"sea", ipc:0, x:300, y:150, w:240, h:110, neighbors:["NPAC","SPAC","US_W","US_C"] },
-  { id:"SPAC", name:"South Pacific", type:"sea", ipc:0, x:560, y:590, w:300, h:90, neighbors:["CPAC","INDO","AUS","SEA"] },
-  { id:"SOJ", name:"Sea of Japan", type:"sea", ipc:0, x:920, y:150, w:240, h:110, neighbors:["NPAC","JPN","CHN","SEA"] },
-
-  { id:"NATL", name:"North Atlantic", type:"sea", ipc:0, x:560, y:270, w:300, h:110, neighbors:["ARCTIC","MATL","NSEA","CAN_E","UK"] },
-  { id:"MATL", name:"Mid Atlantic", type:"sea", ipc:0, x:560, y:390, w:300, h:110, neighbors:["NATL","SATL","NSEA","US_C","FRA"] },
-  { id:"SATL", name:"South Atlantic", type:"sea", ipc:0, x:560, y:510, w:300, h:70, neighbors:["MATL","MED"] },
-  { id:"NSEA", name:"North Sea", type:"sea", ipc:0, x:880, y:270, w:280, h:110, neighbors:["NATL","MATL","BALT","UK","FRA","GER"] },
-  { id:"BALT", name:"Baltic Sea", type:"sea", ipc:0, x:880, y:390, w:280, h:70, neighbors:["NSEA","GER","POL"] },
-  { id:"MED", name:"Mediterranean", type:"sea", ipc:0, x:880, y:470, w:280, h:110, neighbors:["SATL","INDO","FRA","NAF"] },
-  { id:"INDO", name:"Indian Ocean", type:"sea", ipc:0, x:880, y:590, w:280, h:90, neighbors:["MED","SPAC","IND","SEA"] },
-
-  // Lands (Americas)
-  { id:"US_W", name:"Western USA (Washington)", type:"land", ipc:6, capital:"USA", x:40, y:270, w:240, h:110, neighbors:["US_C","NPAC","CPAC"] },
-  { id:"US_C", name:"Central USA", type:"land", ipc:4, x:40, y:390, w:240, h:110, neighbors:["US_W","CAN_E","MATL","CPAC"] },
-  { id:"CAN_E", name:"Eastern Canada", type:"land", ipc:2, x:40, y:510, w:240, h:70, neighbors:["US_C","NATL"] },
-
-  // Lands (Europe)
-  { id:"UK", name:"United Kingdom (London)", type:"land", ipc:5, capital:"UK", x:300, y:270, w:240, h:110, neighbors:["FRA","NATL","NSEA"] },
-  { id:"FRA", name:"France", type:"land", ipc:3, x:300, y:390, w:240, h:110, neighbors:["UK","GER","MATL","NSEA","MED","NAF"] },
-  { id:"GER", name:"Germany (Berlin)", type:"land", ipc:6, capital:"Germany", x:300, y:510, w:240, h:70, neighbors:["FRA","POL","USSR_W","NSEA","BALT"] },
-  { id:"POL", name:"Poland", type:"land", ipc:2, x:300, y:590, w:240, h:90, neighbors:["GER","USSR_W","BALT"] },
-  { id:"NAF", name:"North Africa", type:"land", ipc:2, x:40, y:590, w:240, h:90, neighbors:["FRA","MED"] },
-
-  // Lands (Eurasia / Pacific)
-  { id:"USSR_W", name:"Western USSR", type:"land", ipc:3, x:920, y:270, w:240, h:110, neighbors:["GER","POL","MOS","CAU"] },
-  { id:"MOS", name:"Moscow", type:"land", ipc:6, capital:"USSR", x:920, y:390, w:240, h:110, neighbors:["USSR_W","CAU"] },
-  { id:"CAU", name:"Caucasus", type:"land", ipc:4, x:920, y:510, w:240, h:70, neighbors:["MOS","USSR_W","IND"] },
-
-  { id:"CHN", name:"China", type:"land", ipc:3, x:300, y:150, w:240, h:110, neighbors:["IND","SEA","SOJ","JPN"] },
-  { id:"IND", name:"India", type:"land", ipc:4, x:300, y:40, w:240, h:90, neighbors:["CHN","SEA","CAU","INDO"] },
-  { id:"SEA", name:"Southeast Asia", type:"land", ipc:3, x:40, y:150, w:240, h:110, neighbors:["CHN","IND","JPN","SPAC","INDO","SOJ"] },
-  { id:"JPN", name:"Japan (Tokyo)", type:"land", ipc:6, capital:"Japan", x:920, y:40, w:240, h:90, neighbors:["CHN","SEA","SOJ"] },
-  { id:"AUS", name:"Australia", type:"land", ipc:3, x:920, y:590, w:240, h:90, neighbors:["SPAC"] },
-];
-
-// Factories (where new units can be placed) — capitals only in this Lite scenario.
-const FACTORIES = new Set(["US_W","UK","MOS","GER","JPN"]);
-
-// Starting ownership for the Lite scenario
-const START_OWNER = {
-  // Allies
-  "US_W":"USA","US_C":"USA","CAN_E":"USA",
-  "UK":"UK","FRA":"UK","NAF":"UK","IND":"UK","AUS":"UK",
-  "USSR_W":"USSR","MOS":"USSR","CAU":"USSR",
-  // Axis
-  "GER":"Germany","POL":"Germany",
-  "JPN":"Japan","SEA":"Japan","CHN":"Japan",
-};
-
-// Starting units (simple, balanced-ish)
-const START_UNITS = [
-  // USA
-  ["US_W","USA",[["inf",4],["ftr",1],["bmb",1]]],
-  ["US_C","USA",[["inf",2]]],
-  ["NPAC","USA",[["cv",1],["dd",1],["trn",1]]],
-
-  // UK
-  ["UK","UK",[["inf",4],["ftr",1]]],
-  ["FRA","UK",[["inf",2]]],
-  ["NATL","UK",[["bb",1],["trn",1]]],
-
-  // USSR
-  ["MOS","USSR",[["inf",6],["tank",2],["ftr",1]]],
-  ["USSR_W","USSR",[["inf",3]]],
-  ["CAU","USSR",[["inf",2],["tank",1]]],
-
-  // Germany
-  ["GER","Germany",[["inf",5],["tank",2],["ftr",1]]],
-  ["NSEA","Germany",[["sub",1],["dd",1],["trn",1]]],
-
-  // Japan
-  ["JPN","Japan",[["inf",5],["tank",1],["ftr",1],["bmb",1]]],
-  ["SOJ","Japan",[["bb",1],["cv",1],["dd",1],["sub",1],["trn",1]]],
-  ["SEA","Japan",[["inf",2]]],
-  ["CHN","Japan",[["inf",2]]],
-];
-
-// Victory conditions based on 1941-style capitals (configurable)
-const VICTORY_RULES = {
-  long: {
-    name: "Capture 2 enemy capitals",
-    alliesWin: { type:"capitals", mustHold:["GER","JPN"] },      // Allies hold Berlin+Tokyo at end of Japan turn
-    axisWin:   { type:"capitalsAny2", alliedCapitals:["US_W","UK","MOS"] }, // Axis holds any two at end of USA turn
+AA.map = {
+  image: "assets/board.jpg",
+  width: 0,
+  height: 0,
+  territories: {
+    us_east: {
+      name: "Eastern United States",
+      type: "land",
+      ipc: 12,
+      polygon: [
+        [1600, 1200], [1900, 1200], [1980, 1360], [1860, 1500], [1660, 1500], [1520, 1380]
+      ],
+      neighbors: ["atlantic", "uk", "western_us"],
+      isCapital: true,
+      isVC: true,
+      owner: "USA",
+    },
+    western_us: {
+      name: "Western United States",
+      type: "land",
+      ipc: 10,
+      polygon: [
+        [1200, 1200], [1500, 1200], [1520, 1380], [1400, 1500], [1180, 1500], [1100, 1320]
+      ],
+      neighbors: ["pacific", "us_east"],
+      isVC: true,
+      owner: "USA",
+    },
+    uk: {
+      name: "United Kingdom",
+      type: "land",
+      ipc: 8,
+      polygon: [
+        [2100, 900], [2240, 880], [2300, 980], [2240, 1080], [2120, 1060], [2060, 960]
+      ],
+      neighbors: ["atlantic", "germany"],
+      isCapital: true,
+      isVC: true,
+      owner: "UK",
+    },
+    germany: {
+      name: "Germany",
+      type: "land",
+      ipc: 10,
+      polygon: [
+        [2300, 940], [2460, 920], [2540, 1020], [2480, 1140], [2340, 1140], [2260, 1040]
+      ],
+      neighbors: ["uk", "west_russia", "baltic"],
+      isCapital: true,
+      isVC: true,
+      owner: "Germany",
+    },
+    west_russia: {
+      name: "West Russia",
+      type: "land",
+      ipc: 6,
+      polygon: [
+        [2460, 940], [2640, 920], [2720, 1040], [2660, 1180], [2480, 1180], [2400, 1020]
+      ],
+      neighbors: ["germany", "caucasus", "baltic", "moscow"],
+      isVC: false,
+      owner: "Soviet",
+    },
+    moscow: {
+      name: "Moscow",
+      type: "land",
+      ipc: 8,
+      polygon: [
+        [2640, 1080], [2820, 1060], [2900, 1200], [2820, 1340], [2660, 1340], [2580, 1180]
+      ],
+      neighbors: ["west_russia", "caucasus"],
+      isCapital: true,
+      isVC: true,
+      owner: "Soviet",
+    },
+    caucasus: {
+      name: "Caucasus",
+      type: "land",
+      ipc: 4,
+      polygon: [
+        [2480, 1180], [2660, 1180], [2720, 1300], [2620, 1420], [2460, 1420], [2380, 1300]
+      ],
+      neighbors: ["west_russia", "baltic", "moscow"],
+      isVC: false,
+      owner: "Soviet",
+    },
+    japan: {
+      name: "Japan",
+      type: "land",
+      ipc: 8,
+      polygon: [
+        [1400, 880], [1520, 860], [1580, 960], [1520, 1040], [1400, 1060], [1340, 960]
+      ],
+      neighbors: ["pacific"],
+      isCapital: true,
+      isVC: true,
+      owner: "Japan",
+    },
+    baltic: {
+      name: "Baltic Sea",
+      type: "sea",
+      ipc: 0,
+      polygon: [
+        [2320, 780], [2520, 760], [2600, 860], [2520, 960], [2340, 980], [2240, 880]
+      ],
+      neighbors: ["uk", "germany", "west_russia", "caucasus", "atlantic"],
+      isVC: false,
+      owner: null,
+    },
+    atlantic: {
+      name: "North Atlantic",
+      type: "sea",
+      ipc: 0,
+      polygon: [
+        [1800, 960], [2100, 940], [2240, 1040], [2140, 1180], [1880, 1180], [1720, 1060]
+      ],
+      neighbors: ["us_east", "uk", "baltic"],
+      isVC: false,
+      owner: null,
+    },
+    pacific: {
+      name: "Central Pacific",
+      type: "sea",
+      ipc: 0,
+      polygon: [
+        [1000, 960], [1200, 940], [1320, 1040], [1240, 1160], [1020, 1180], [920, 1060]
+      ],
+      neighbors: ["western_us"],
+      isVC: false,
+      owner: null,
+    },
   },
-  short: {
-    name: "Short game: capture 1 enemy capital",
-    alliesWin: { type:"capitalsAny1", enemyCapitals:["GER","JPN"] },
-    axisWin:   { type:"capitalsAny1", enemyCapitals:["US_W","UK"] }, // per 1941 short option
-  }
 };
 
+AA.units = {
+  infantry:   { cost: 3, att: 1, def: 2, move: 1 },
+  artillery:  { cost: 4, att: 2, def: 2, move: 1 },
+  tank:       { cost: 6, att: 3, def: 3, move: 2 },
+  aa:         { cost: 5, att: null, def: null, move: 1 },
+  fighter:    { cost: 10, att: 3, def: 4, move: 4 },
+  bomber:     { cost: 12, att: 4, def: 1, move: 6 },
+  destroyer:  { cost: 8, att: 2, def: 2, move: 2 },
+  sub:        { cost: 6, att: 2, def: 1, move: 2 },
+  cruiser:    { cost: 12, att: 3, def: 3, move: 2 },
+  carrier:    { cost: 14, att: 1, def: 2, move: 2 },
+  battleship: { cost: 20, att: 4, def: 4, move: 2 },
+  transport:  { cost: 7, att: 0, def: 0, move: 2 },
+  ic:         { cost: 15, att: null, def: null, move: null },
+};
+
+AA.setup = {
+  turnOrder: ["Soviet", "Germany", "UK", "Japan", "USA"],
+  ipc: { Soviet: 24, Germany: 30, UK: 28, Japan: 30, USA: 32 },
+  stacks: {
+    us_east: { USA: { infantry: 2, artillery: 1, transport: 0 } },
+    western_us: { USA: { infantry: 1, tank: 1 } },
+    uk: { UK: { infantry: 2, fighter: 1 } },
+    germany: { Germany: { infantry: 3, tank: 1 } },
+    west_russia: { Soviet: { infantry: 4, artillery: 1 } },
+    caucasus: { Soviet: { infantry: 2, tank: 1 } },
+    moscow: { Soviet: { infantry: 3, tank: 1 } },
+    atlantic: { UK: { battleship: 1, transport: 1 } },
+    pacific: { USA: { carrier: 1, destroyer: 1 } },
+    japan: { Japan: { infantry: 3, fighter: 1 } },
+  },
+};
