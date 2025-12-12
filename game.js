@@ -1114,6 +1114,25 @@
       }
     }
 
+    // neighbor highlights for the currently selected/source territory
+    const highlightBase = S.move?.source || S.selected;
+    if (highlightBase) {
+      const source = territoryById(highlightBase);
+      const neigh = source?.neighbors || [];
+      const hostileColor = "rgba(248,113,113,0.85)";
+      const friendlyColor = "rgba(125,211,252,0.85)";
+      ctx.setLineDash([6, 4]);
+      for (const nid of neigh) {
+        const nt = territoryById(nid);
+        if (!nt) continue;
+        const hostile = isHostileSpace(nid, currentPower());
+        ctx.strokeStyle = hostile ? hostileColor : friendlyColor;
+        ctx.lineWidth = hostile ? 3 : 2;
+        roundRect(ctx, nt.x + 2, nt.y + 2, nt.w - 4, nt.h - 4, 12, false, true);
+      }
+      ctx.setLineDash([]);
+    }
+
     // top-left status box
     ctx.fillStyle = "rgba(2,6,23,0.65)";
     ctx.strokeStyle = "rgba(148,163,184,0.25)";
