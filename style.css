@@ -35,7 +35,7 @@ body{
   background:rgba(17,24,38,0.65);
   font-size:12px;
 }
-.btn{
+.btn{ 
   cursor:pointer;
   padding:8px 10px;
   border-radius:10px;
@@ -44,17 +44,19 @@ body{
   color:var(--text);
   font-weight:600;
 }
+.btn.tiny{padding:4px 6px; font-size:11px}
 .btn:hover{border-color:#2f455f}
 .btn.danger{border-color:#4b1f1f; background:rgba(127,29,29,0.35); color:#fecaca}
 .btn.danger:hover{border-color:#7f1d1d}
 .layout{display:grid; grid-template-columns: 1fr 360px; gap:12px; padding:12px}
 .board{position:relative}
-#map{
+#board{
   width:100%;
   height:auto;
   border:1px solid var(--line);
   border-radius:16px;
   background: linear-gradient(180deg, #07101b 0%, #060d17 100%);
+  display:block;
 }
 .hud{
   position:absolute;
@@ -106,10 +108,6 @@ select{
   background:rgba(17,24,38,0.65);
   font-weight:800; font-size:11px;
 }
-.purch-grid{display:flex; flex-direction:column; gap:8px; margin-top:10px}
-.purch-item{display:flex; align-items:center; justify-content:space-between; gap:8px; border:1px solid var(--line); border-radius:12px; padding:8px 10px; background:rgba(15,22,35,0.65); font-size:12px}
-.purch-item .name{display:flex; gap:8px; align-items:center}
-.purch-item input{width:70px; padding:6px 8px; border-radius:10px; border:1px solid var(--line); background:rgba(17,24,38,0.65); color:var(--text)}
 .log{height:260px; overflow:auto; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size:12px; background:rgba(10,14,20,0.65)}
 .log .line{padding:4px 0; border-bottom:1px dashed rgba(36,52,71,0.6)}
 dialog{
@@ -124,3 +122,29 @@ dialog{
 .dlg-actions{padding:12px 14px; border-top:1px solid var(--line); display:flex; gap:8px; justify-content:flex-end; flex-wrap:wrap}
 .small{font-size:12px; color:var(--muted)}
 hr{border:none; border-top:1px solid var(--line); margin:10px 0}
+
+.overlay{
+  position:fixed; inset:0; background:rgba(0,0,0,0.75);
+  display:flex; align-items:center; justify-content:center;
+  z-index:20;
+}
+.start-card{
+  background:rgba(12,18,28,0.95);
+  border:1px solid var(--line);
+  border-radius:16px;
+  padding:18px;
+  width:min(420px, 92vw);
+  box-shadow:0 10px 40px rgba(0,0,0,0.45);
+}
+.start-card h1{margin-top:0; margin-bottom:6px}
+.start-card p{margin-top:0; color:var(--muted)}
+.stacked{display:flex; flex-direction:column; gap:6px; font-weight:600; color:var(--text); margin-bottom:12px}
+.hidden{display:none !important}
+
+.unit-ref{display:grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap:8px; font-size:12px}
+.unit-card{border:1px solid var(--line); border-radius:12px; padding:8px 10px; background:rgba(15,22,35,0.65)}
+.unit-card .name{font-weight:700}
+.unit-card .stats{color:var(--muted)}
+
+.territory-list{display:flex; flex-direction:column; gap:8px}
+.territory-row{border:1px solid var(--line); border-radius:12px; padding:8px 10px; background:rgba(15,22,35,0.65); font-size:12px}
