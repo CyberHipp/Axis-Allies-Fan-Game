@@ -331,14 +331,93 @@
         alert('Select a victory mode to start.');
         return;
       }
-      state.victoryMode = mode;
-      state.started = true;
-      document.getElementById('start-overlay').classList.add('hidden');
-      resetLog();
-      log(`Game start. Victory mode: ${mode}.`);
-      refreshPills();
-      render();
-    });
+    }
+
+    // neighbor highlights for the currently selected/source territory
+    const highlightBase = S.move?.source || S.selected;
+    if (highlightBase) {
+      const source = territoryById(highlightBase);
+      const neigh = source?.neighbors || [];
+      const hostileColor = "rgba(248,113,113,0.85)";
+      const friendlyColor = "rgba(125,211,252,0.85)";
+      ctx.setLineDash([6, 4]);
+      for (const nid of neigh) {
+        const nt = territoryById(nid);
+        if (!nt) continue;
+        const hostile = isHostileSpace(nid, currentPower());
+        ctx.strokeStyle = hostile ? hostileColor : friendlyColor;
+        ctx.lineWidth = hostile ? 3 : 2;
+        roundRect(ctx, nt.x + 2, nt.y + 2, nt.w - 4, nt.h - 4, 12, false, true);
+      }
+      ctx.setLineDash([]);
+    }
+
+    // top-left status box
+    ctx.fillStyle = "rgba(2,6,23,0.65)";
+    ctx.strokeStyle = "rgba(148,163,184,0.25)";
+    roundRect(ctx, 14, 14, 330, 86, 14, true, true);
+    ctx.fillStyle = "rgba(226,232,240,0.9)";
+    ctx.font = "12px ui-sans-serif, system-ui";
+    ctx.fillText(`Power: ${currentPower()} (${powerSide(currentPower())})`, 26, 38);
+    ctx.fillText(`Phase: ${currentPhase()}`, 26, 56);
+    ctx.fillText(`Round: ${S.round}`, 26, 74);
+    if (S.vpMode) ctx.fillText(`VP (Japan): ${S.vpJapan}`, 26, 92);
+  }
+
+  function roundRect(ctx, x, y, w, h, r, fill, stroke) {
+    const rr = Math.min(r, w/2, h/2);
+    ctx.beginPath();
+    ctx.moveTo(x+rr, y);
+    ctx.arcTo(x+w, y, x+w, y+h, rr);
+    ctx.arcTo(x+w, y+h, x, y+h, rr);
+    ctx.arcTo(x, y+h, x, y, rr);
+    ctx.arcTo(x, y, x+w, y, rr);
+    ctx.closePath();
+    if (fill) ctx.fill();
+    if (stroke) ctx.stroke();
+  }
+
+  function pickTerritoryAt(px, py) {
+    for (let i=MAP.length-1;i>=0;i--){
+      const t = MAP[i];
+      if (px>=t.x && px<=t.x+t.w && py>=t.y && py<=t.y+t.h) return t.id;
+    }
+    return null;
+  }
+
+  // ---------- topbar / HUD ----------
+  function updateTopbar() {
+    const p = currentPower();
+    $("#pill-round").textContent = `Round: ${S.round}`;
+    $("#pill-power").textContent = `Power: ${p}`;
+    $("#pill-phase").textContent = `Phase: ${currentPhase()}`;
+    $("#pill-ipc").textContent = `IPC: ${S.ipc[p]}`;
+
+    $("#chk-vp-mode").checked = S.vpMode;
+  }
+
+  function syncHUD() {
+    $("#hud-source").textContent = S.move.source ? territoryById(S.move.source).name : "—";
+    $("#hud-target").textContent = "—";
+  }
+
+  // ---------- persistence ----------
+  function saveLocal() {
+    localStorage.setItem("aalite_state", JSON.stringify(S));
+    log("Saved to localStorage.");
+  }
+  function loadLocal() {
+    const raw = localStorage.getItem("aalite_state");
+    if (!raw) { log("No saved game found."); return; }
+    try {
+      S = JSON.parse(raw);
+      // defensive defaults
+      S.history = S.history || [];
+      log("Loaded from localStorage.");
+      syncAll(true);
+    } catch(e) {
+      log("Load failed: " + e.message);
+    }
   }
 
   function initialOwnershipIpc() {
