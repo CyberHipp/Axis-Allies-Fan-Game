@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Axis & Allies (Lite) — Fan-Made Web Game</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <div class="title">Axis & Allies (Lite)</div>
+      <div class="subtitle">Fan-made, simplified digital adaptation • Hotseat multiplayer</div>
+    </div>
+    <div class="turnbox">
+      <div class="pill" id="pill-round">Round: 1</div>
+      <div class="pill" id="pill-power">Power: —</div>
+      <div class="pill" id="pill-phase">Phase: —</div>
+      <div class="pill" id="pill-ipc">IPC: —</div>
+      <button class="btn" id="btn-end-phase" title="Advance to the next phase (or next power)">End Phase</button>
+      <button class="btn" id="btn-help" title="Show quick rules">Help</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="board">
+      <canvas id="map" width="1200" height="700" aria-label="Game map canvas"></canvas>
+      <div class="hud">
+        <div class="hud-row">
+          <span class="hud-label">Mode:</span>
+          <select id="mode">
+            <option value="select">Select</option>
+            <option value="move">Move</option>
+            <option value="load">Load to Transport</option>
+            <option value="unload">Unload from Transport</option>
+          </select>
+
+          <span class="hud-label">Combat:</span>
+          <button class="btn" id="btn-resolve" title="Resolve all battles created this turn">Resolve Battles</button>
+          <label class="check"><input type="checkbox" id="chk-auto-casualties" checked /> Auto casualties</label>
+          <label class="check"><input type="checkbox" id="chk-vp-mode" /> Pacific-style VP mode</label>
+        </div>
+
+        <div class="hud-row">
+          <span class="hud-label">Source:</span> <span id="hud-source">—</span>
+          <span class="hud-label">Target:</span> <span id="hud-target">—</span>
+          <span class="hud-label">Tip:</span> <span id="hud-tip">Click a territory to inspect. Switch Mode to Move to issue moves.</span>
+        </div>
+      </div>
+    </section>
+
+    <aside class="side">
+      <div class="panel">
+        <div class="panel-title">Territory</div>
+        <div class="panel-body" id="panel-territory">
+          <div class="muted">Click a territory on the map.</div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-title">Purchase</div>
+        <div class="panel-body">
+          <div class="muted">During <b>Purchase</b>, buy units for the current power.</div>
+          <div id="purchase-ui"></div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-title">Log</div>
+        <div class="panel-body log" id="log"></div>
+        <div class="panel-footer">
+          <button class="btn" id="btn-save">Save</button>
+          <button class="btn" id="btn-load">Load</button>
+          <button class="btn" id="btn-export">Export JSON</button>
+          <button class="btn" id="btn-import">Import JSON</button>
+          <button class="btn danger" id="btn-reset">Reset</button>
+        </div>
+      </div>
+    </aside>
+  </main>
+
+  <dialog id="dlg">
+    <div class="dlg-title" id="dlg-title">Dialog</div>
+    <div class="dlg-body" id="dlg-body"></div>
+    <div class="dlg-actions" id="dlg-actions"></div>
+  </dialog>
+
+  <script src="data.js"></script>
+  <script src="game.js"></script>
+</body>
+</html>

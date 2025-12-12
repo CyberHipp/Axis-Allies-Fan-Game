@@ -1,0 +1,126 @@
+:root{
+  --bg:#0b0f14;
+  --panel:#111826;
+  --panel2:#0f1623;
+  --text:#e6edf3;
+  --muted:#9fb0c0;
+  --accent:#7dd3fc;
+  --danger:#f87171;
+  --ok:#86efac;
+  --line:#243447;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0;
+  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji";
+  background: radial-gradient(1200px 600px at 70% 20%, #0d1b2a 0%, var(--bg) 55%);
+  color:var(--text);
+}
+.topbar{
+  display:flex; align-items:center; justify-content:space-between;
+  padding:12px 14px;
+  border-bottom:1px solid var(--line);
+  background:rgba(10,14,20,0.85);
+  position:sticky; top:0; z-index:10;
+  backdrop-filter: blur(8px);
+}
+.brand .title{font-size:18px; font-weight:700}
+.brand .subtitle{font-size:12px; color:var(--muted)}
+.turnbox{display:flex; gap:8px; align-items:center; flex-wrap:wrap; justify-content:flex-end}
+.pill{
+  padding:6px 10px;
+  border:1px solid var(--line);
+  border-radius:999px;
+  background:rgba(17,24,38,0.65);
+  font-size:12px;
+}
+.btn{
+  cursor:pointer;
+  padding:8px 10px;
+  border-radius:10px;
+  border:1px solid var(--line);
+  background:rgba(17,24,38,0.65);
+  color:var(--text);
+  font-weight:600;
+}
+.btn:hover{border-color:#2f455f}
+.btn.danger{border-color:#4b1f1f; background:rgba(127,29,29,0.35); color:#fecaca}
+.btn.danger:hover{border-color:#7f1d1d}
+.layout{display:grid; grid-template-columns: 1fr 360px; gap:12px; padding:12px}
+.board{position:relative}
+#map{
+  width:100%;
+  height:auto;
+  border:1px solid var(--line);
+  border-radius:16px;
+  background: linear-gradient(180deg, #07101b 0%, #060d17 100%);
+}
+.hud{
+  position:absolute;
+  left:10px; right:10px; bottom:10px;
+  background:rgba(17,24,38,0.72);
+  border:1px solid var(--line);
+  border-radius:14px;
+  padding:10px;
+  backdrop-filter: blur(6px);
+}
+.hud-row{display:flex; gap:10px; align-items:center; flex-wrap:wrap}
+.hud-label{color:var(--muted); font-size:12px}
+select{
+  background:rgba(17,24,38,0.65);
+  color:var(--text);
+  border:1px solid var(--line);
+  border-radius:10px;
+  padding:6px 8px;
+}
+.check{display:flex; gap:6px; align-items:center; font-size:12px; color:var(--muted)}
+.side{display:flex; flex-direction:column; gap:12px}
+.panel{
+  border:1px solid var(--line);
+  border-radius:16px;
+  overflow:hidden;
+  background:rgba(17,24,38,0.65);
+}
+.panel-title{
+  padding:10px 12px;
+  border-bottom:1px solid var(--line);
+  font-weight:700;
+}
+.panel-body{padding:12px}
+.panel-footer{
+  padding:10px 12px;
+  border-top:1px solid var(--line);
+  display:flex; gap:8px; flex-wrap:wrap;
+}
+.muted{color:var(--muted); font-size:12px}
+.kv{display:grid; grid-template-columns: 90px 1fr; gap:6px; font-size:12px}
+.kv b{color:var(--muted); font-weight:600}
+.units{margin-top:10px; display:flex; flex-direction:column; gap:8px}
+.unit-row{display:flex; justify-content:space-between; font-size:12px; border:1px solid var(--line); border-radius:12px; padding:8px 10px; background:rgba(15,22,35,0.65)}
+.unit-row .l{display:flex; gap:8px; align-items:center}
+.badge{
+  width:20px; height:20px; border-radius:6px;
+  display:inline-flex; align-items:center; justify-content:center;
+  border:1px solid var(--line);
+  background:rgba(17,24,38,0.65);
+  font-weight:800; font-size:11px;
+}
+.purch-grid{display:flex; flex-direction:column; gap:8px; margin-top:10px}
+.purch-item{display:flex; align-items:center; justify-content:space-between; gap:8px; border:1px solid var(--line); border-radius:12px; padding:8px 10px; background:rgba(15,22,35,0.65); font-size:12px}
+.purch-item .name{display:flex; gap:8px; align-items:center}
+.purch-item input{width:70px; padding:6px 8px; border-radius:10px; border:1px solid var(--line); background:rgba(17,24,38,0.65); color:var(--text)}
+.log{height:260px; overflow:auto; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size:12px; background:rgba(10,14,20,0.65)}
+.log .line{padding:4px 0; border-bottom:1px dashed rgba(36,52,71,0.6)}
+dialog{
+  width:min(720px, 92vw);
+  border:1px solid var(--line);
+  border-radius:16px;
+  background:rgba(10,14,20,0.95);
+  color:var(--text);
+}
+.dlg-title{padding:12px 14px; font-weight:800; border-bottom:1px solid var(--line)}
+.dlg-body{padding:12px 14px; color:var(--text)}
+.dlg-actions{padding:12px 14px; border-top:1px solid var(--line); display:flex; gap:8px; justify-content:flex-end; flex-wrap:wrap}
+.small{font-size:12px; color:var(--muted)}
+hr{border:none; border-top:1px solid var(--line); margin:10px 0}
