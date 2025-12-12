@@ -42,6 +42,7 @@ Copy/paste spec saved for reference and progress tracking.
 
 ## Milestone 8 — Amphibious assaults
 - [ ] Implement transport load/offload rules, sequencing (sea combat → bombardment → land), retreat edge cases, and minimal UI flow.
+  - [x] Load/unload via transports with capacity checks and amphibious battle flagging.
 - [ ] Acceptance: UK can run first-turn amphib assault end-to-end with logs.
 
 ## Milestone 9 — Economy
@@ -55,6 +56,7 @@ Copy/paste spec saved for reference and progress tracking.
 ## Regression tests
 - [ ] Add console tests for amphibious scenarios (no sea defenders, with destroyer, transport sunk edge case) reporting PASS/FAIL.
 - [x] Add deterministic RNG, serialization, and scripted battle harness via `runSelfTests()`.
+  - [x] Added amphibious load/unload regression in `runSelfTests()`.
 
 ## Definition of Done
 - [ ] Public v1: loads, board renders, selection works, turn phases work, legal movement, combat with dice log, amphibious assaults playable, economy, save/load.

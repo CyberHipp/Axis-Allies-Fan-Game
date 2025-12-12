@@ -28,6 +28,8 @@
   const SEA_UNITS = new Set(['destroyer', 'sub', 'cruiser', 'carrier', 'battleship', 'transport']);
   const AIR_UNITS = new Set(['fighter', 'bomber']);
 
+  const CARGO_CAPACITY = 2; // per transport
+
   const STORAGE_KEY = 'aa1942-save';
 
   const state = createInitialState();
@@ -49,6 +51,7 @@
       stacks,
       purchases: {},
       pendingBattles: [],
+      embarked: {},
       movePool: {},
       rngSeed: 1,
       log: [],
@@ -265,26 +268,102 @@
     render();
   }
 
+  function ensureEmbarked(seaId, power) {
+    state.embarked[seaId] = state.embarked[seaId] || {};
+    state.embarked[seaId][power] = state.embarked[seaId][power] || {};
+    return state.embarked[seaId][power];
+  }
+
+  function embarkedCount(seaId, power) {
+    const pool = state.embarked[seaId]?.[power];
+    if (!pool) return 0;
+    return Object.values(pool).reduce((a, b) => a + b, 0);
+  }
+
+  function transportCapacity(seaId, power) {
+    const transports = state.stacks[seaId]?.[power]?.transport || 0;
+    return transports * CARGO_CAPACITY - embarkedCount(seaId, power);
+  }
+
+  function seaIsHostile(seaId, power) {
+    const t = AA.map.territories[seaId];
+    if (!t || t.type !== 'sea') return false;
+    return Object.entries(state.stacks[seaId] || {}).some(([p, units]) => p !== power && Object.keys(units).length);
+  }
+
+  function moveCargo(fromSea, toSea, power) {
+    const cargo = state.embarked[fromSea]?.[power];
+    if (!cargo) return;
+    const dest = ensureEmbarked(toSea, power);
+    Object.entries(cargo).forEach(([type, count]) => {
+      dest[type] = (dest[type] || 0) + count;
+    });
+    delete state.embarked[fromSea][power];
+    if (!Object.keys(state.embarked[fromSea]).length) delete state.embarked[fromSea];
+  }
+
+  function consumeCargo(seaId, power, type, count) {
+    const cargo = state.embarked[seaId]?.[power];
+    if (!cargo || (cargo[type] || 0) < count) return false;
+    cargo[type] -= count;
+    if (cargo[type] <= 0) delete cargo[type];
+    if (!Object.keys(cargo).length) delete state.embarked[seaId][power];
+    if (state.embarked[seaId] && !Object.keys(state.embarked[seaId]).length) delete state.embarked[seaId];
+    return true;
+  }
+
   function performMove(fromId, toId, unitType, count) {
     if (!state.started) { alert('Start the game first.'); return; }
     if (activePower() !== state.ownership[fromId]) { alert('You can only move units you own.'); return; }
     const phase = PHASES[state.phaseIndex];
     if (phase !== 'Combat Move' && phase !== 'Noncombat Move') { alert('Moves allowed only during move phases.'); return; }
     const from = state.stacks[fromId] && state.stacks[fromId][activePower()];
-    if (!from || (from[unitType] || 0) < count) { alert('Not enough units to move.'); return; }
     ensureMovePool();
+    const terr = AA.map.territories[fromId];
+    if (!terr.neighbors.includes(toId)) { alert('Must move to adjacent territory.'); return; }
+    const moveCap = AA.units[unitType]?.move || 0;
+    if (moveCap < 1) { alert('Unit cannot move.'); return; }
+
+    const toTerr = AA.map.territories[toId];
+    if (!toTerr) { alert('Invalid destination'); return; }
+    const fromType = terr.type;
+    const toType = toTerr.type;
+
+    // special: disembark cargo
+    if (!SEA_UNITS.has(unitType) && !AIR_UNITS.has(unitType) && fromType === 'sea') {
+      if (!consumeCargo(fromId, activePower(), unitType, count)) { alert('No such cargo on transports.'); return; }
+      const targetOwner = state.ownership[toId];
+      if (phase === 'Noncombat Move' && targetOwner && targetOwner !== activePower()) { alert('Noncombat cannot enter hostile territory.'); ensureEmbarked(fromId, activePower())[unitType] = (ensureEmbarked(fromId, activePower())[unitType] || 0) + count; return; }
+      state.stacks[toId] = state.stacks[toId] || {};
+      state.stacks[toId][activePower()] = state.stacks[toId][activePower()] || {};
+      state.stacks[toId][activePower()][unitType] = (state.stacks[toId][activePower()][unitType] || 0) + count;
+      if (targetOwner && targetOwner !== activePower() && phase === 'Combat Move') {
+        queueBattle(toId, { amphibious: true, seaZoneId: fromId });
+        log(`Amphibious landing: ${count} ${unitType} from ${AA.map.territories[fromId].name} into ${AA.map.territories[toId].name}.`);
+      } else {
+        log(`Landed ${count} ${unitType} from transports into ${AA.map.territories[toId].name}.`);
+      }
+      selectTerritory(toId);
+      return;
+    }
+
+    if (!from || (from[unitType] || 0) < count) { alert('Not enough units to move.'); return; }
     const taken = takeFromPool(fromId, unitType, count);
     if (!taken) { alert('No movement points remaining for those units.'); return; }
     const revert = () => addBackToPool(fromId, unitType, taken);
-    const terr = AA.map.territories[fromId];
-    if (!terr.neighbors.includes(toId)) { alert('Must move to adjacent territory.'); revert(); return; }
-    const moveCap = AA.units[unitType]?.move || 0;
-    if (moveCap < 1) { alert('Unit cannot move.'); revert(); return; }
 
-    const toTerr = AA.map.territories[toId];
-    if (!toTerr) { alert('Invalid destination'); revert(); return; }
+    if (!SEA_UNITS.has(unitType) && !AIR_UNITS.has(unitType) && toType === 'sea') {
+      if (seaIsHostile(toId, activePower())) { alert('Cannot load in hostile sea zone.'); revert(); return; }
+      if (transportCapacity(toId, activePower()) < count) { alert('Not enough transport capacity.'); revert(); return; }
+      from[unitType] -= count; if (from[unitType] <= 0) delete from[unitType];
+      const pool = ensureEmbarked(toId, activePower());
+      pool[unitType] = (pool[unitType] || 0) + count;
+      log(`Loaded ${count} ${unitType} onto transports in ${AA.map.territories[toId].name}.`);
+      return;
+    }
+
     if (SEA_UNITS.has(unitType)) {
-      if (terr.type !== 'sea' || toTerr.type !== 'sea') { alert('Sea units must stay in sea zones.'); revert(); return; }
+      if (fromType !== 'sea' || toType !== 'sea') { alert('Sea units must stay in sea zones.'); revert(); return; }
     } else if (AIR_UNITS.has(unitType)) {
       const remainingAfter = taken.reduce((r, seg) => Math.min(r, seg.remaining - 1), Infinity);
       const friendlyLanding = (state.ownership[toId] === activePower() || state.ownership[toId] === null) && toTerr.type === 'land';
@@ -294,7 +373,7 @@
         return;
       }
     } else {
-      if (terr.type !== 'land' || toTerr.type !== 'land') { alert('Land units must move between land territories.'); revert(); return; }
+      if (fromType !== 'land' || toType !== 'land') { alert('Land units must move between land territories.'); revert(); return; }
     }
 
     // subtract
@@ -304,6 +383,10 @@
     state.stacks[toId] = state.stacks[toId] || {};
     state.stacks[toId][activePower()] = state.stacks[toId][activePower()] || {};
     state.stacks[toId][activePower()][unitType] = (state.stacks[toId][activePower()][unitType] || 0) + count;
+
+    if (unitType === 'transport' && fromType === 'sea' && toType === 'sea') {
+      moveCargo(fromId, toId, activePower());
+    }
 
     pushToPool(toId, unitType, taken);
 
@@ -337,10 +420,10 @@
     state.stacks[fromId][activePower()][unitType] = (state.stacks[fromId][activePower()][unitType] || 0) + count;
   }
 
-  function queueBattle(tid) {
-    if (!state.pendingBattles.find(b => b.territoryId === tid)) {
-      state.pendingBattles.push({ territoryId: tid });
-    }
+  function queueBattle(tid, info = {}) {
+    const existing = state.pendingBattles.find(b => b.territoryId === tid);
+    if (existing) { Object.assign(existing, info); return; }
+    state.pendingBattles.push({ territoryId: tid, ...info });
   }
 
   function casualtyStep(units, hits) {
@@ -382,7 +465,7 @@
     if (!Object.keys(attackers).length) { log('No attackers present; battle skipped.'); return false; }
     if (!Object.keys(defenderUnits).length) { log('No defenders present; territory already clear.'); return true; }
 
-    log(`Battle at ${AA.map.territories[tid].name} begins.`);
+    log(`Battle at ${AA.map.territories[tid].name} begins.${battle.amphibious ? ' (Amphibious)' : ''}`);
     let round = 1;
     while (Object.keys(attackers).length && Object.keys(defenderUnits).length) {
       log(`Round ${round}`);
@@ -504,6 +587,7 @@
     const loaded = JSON.parse(payload);
     Object.keys(state).forEach(k => delete state[k]);
     Object.assign(state, loaded);
+    state.embarked = state.embarked || {};
     rng = makeRng(state.rngSeed);
     enterPhase(PHASES[state.phaseIndex]);
     rebuildLog();
@@ -705,6 +789,8 @@
   }
 
   function runSelfTests() {
+    const snapshot = JSON.stringify(state);
+    const logSnapshot = document.getElementById('log').innerHTML;
     const results = [];
     // deterministic RNG
     rng = makeRng(1); state.rngSeed = 1;
@@ -726,6 +812,36 @@
     const battlePassed = resolveBattle({ territoryId: tid }) && state.ownership[tid] === 'Soviet';
     results.push({ name: 'Scripted battle (bomber+fighter vs infantry)', pass: battlePassed });
     delete AA.map.territories[tid]; delete state.stacks[tid]; delete state.ownership[tid];
+
+    // amphibious load/unload
+    state.started = true;
+    state.powerIndex = AA.setup.turnOrder.indexOf('UK');
+    state.phaseIndex = PHASES.indexOf('Combat Move');
+    state.pendingBattles = [];
+    state.embarked = {};
+    state.stacks.uk = { UK: { infantry: 1 } };
+    state.stacks.baltic = { UK: { transport: 1 } };
+    state.stacks.germany = { Germany: { infantry: 1 } };
+    state.ownership.uk = 'UK';
+    state.ownership.baltic = null;
+    state.ownership.germany = 'Germany';
+    buildMovePool();
+    performMove('uk', 'baltic', 'infantry', 1);
+    const loaded = state.embarked.baltic?.UK?.infantry === 1;
+    performMove('baltic', 'germany', 'infantry', 1);
+    const queued = state.pendingBattles.some(b => b.territoryId === 'germany' && b.amphibious);
+    state.phaseIndex = PHASES.indexOf('Conduct Combat');
+    resolveAllBattles();
+    const captured = state.ownership.germany === 'UK';
+    results.push({ name: 'Amphibious (load + land into Germany)', pass: loaded && queued && captured });
+
+    const restored = JSON.parse(snapshot);
+    Object.keys(state).forEach(k => delete state[k]);
+    Object.assign(state, restored);
+    rng = makeRng(state.rngSeed);
+    document.getElementById('log').innerHTML = logSnapshot;
+    refreshPills();
+    render();
 
     console.table(results.map(r => ({ test: r.name, pass: r.pass, detail: r.detail || '' })));
     results.forEach(r => log(`${r.pass ? 'PASS' : 'FAIL'} ${r.name}`));
