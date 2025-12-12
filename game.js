@@ -1,1351 +1,373 @@
-// Axis & Allies (Lite) — core game logic + UI
-// Hotseat multiplayer. Simplified rules. See README.md for details.
-//
-// IMPORTANT:
-// - This is NOT an official product.
-// - No official art/assets are used.
-// - It is a learning project / fan adaptation.
-
+// Axis & Allies 1942.2 prototype
 (() => {
-  "use strict";
+  'use strict';
 
-  // ---------- helpers ----------
-  const $ = (sel) => document.querySelector(sel);
-  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
-  const deepCopy = (x) => JSON.parse(JSON.stringify(x));
-  const nowHHMMSS = () => new Date().toLocaleTimeString();
-  const die = () => 1 + Math.floor(Math.random() * 6);
+  const canvas = document.getElementById('board');
+  const ctx = canvas.getContext('2d');
+  const boardImg = document.getElementById('boardImg');
 
-  function fmtUnitsSummary(units) {
-    const by = {};
-    for (const u of units) {
-      const key = `${u.owner}:${u.type}`;
-      by[key] = (by[key] || 0) + 1;
-    }
-    const parts = Object.entries(by).map(([k, n]) => {
-      const [owner, type] = k.split(":");
-      return `${owner} ${type}×${n}`;
-    });
-    return parts.length ? parts.join(", ") : "—";
-  }
+  const PHASES = [
+    'Purchase',
+    'Combat Move',
+    'Conduct Combat',
+    'Noncombat Move',
+    'Mobilize',
+    'Collect Income',
+  ];
 
-  function groupBy(arr, fnKey) {
-    const m = new Map();
-    for (const x of arr) {
-      const k = fnKey(x);
-      if (!m.has(k)) m.set(k, []);
-      m.get(k).push(x);
-    }
-    return m;
-  }
+  const POWER_COLORS = {
+    Soviet: '#ef4444',
+    Germany: '#f59e0b',
+    UK: '#22c55e',
+    Japan: '#e11d48',
+    USA: '#60a5fa',
+  };
 
-  function powerSide(p) { return POWERS[p]?.side || "Neutral"; }
+  const SIDE = { Soviet: 'Allies', Germany: 'Axis', UK: 'Allies', Japan: 'Axis', USA: 'Allies' };
 
-  function territoryById(id) { return MAP.find(t => t.id === id); }
+  const state = {
+    started: false,
+    victoryMode: null,
+    round: 1,
+    powerIndex: 0,
+    phaseIndex: 0,
+    selected: null,
+    pendingBattles: [],
+    pendingAmphib: [],
+    ownership: {},
+    stacks: {},
+    ipc: {},
+    log: [],
+    view: { x: 0, y: 0, scale: 0.35 },
+  };
 
-  function isFactory(tid) { return FACTORIES.has(tid); }
+  function deepCopy(x) { return JSON.parse(JSON.stringify(x)); }
 
-  function isLand(tid) { return territoryById(tid)?.type === "land"; }
-  function isSea(tid) { return territoryById(tid)?.type === "sea"; }
-
-  function canShareSpace(ownerA, ownerB) {
-    // Mixed allied stacks are allowed in defense in many A&A variants.
-    // Lite rule: units may stack with same-side powers only.
-    return ownerA === ownerB || (powerSide(ownerA) === powerSide(ownerB));
-  }
-
-  // ---------- state ----------
-  let _uid = 0;
-  function newUnitId() { _uid += 1; return `u${_uid}`; }
-
-  function makeUnit(type, owner) {
-    const st = UNIT_STATS[type];
-    return {
-      id: newUnitId(),
-      type,
-      owner,
-      hp: st.hp || 1,
-      moved: 0,        // how many moves spent this turn
-      from: null,      // last origin (for retreat)
-      flags: {},       // { combatMoved: true }
-      cargo: [],       // for transports only: array of unit objects (land units)
-    };
-  }
-
-  function defaultState() {
-    _uid = 0;
-    const territories = {};
-    for (const t of MAP) {
-      territories[t.id] = {
-        id: t.id,
-        owner: (t.type === "land") ? (START_OWNER[t.id] || null) : null,
-        units: [],
-      };
-    }
-
-    // place starting units
-    for (const [tid, owner, entries] of START_UNITS) {
-      const slot = territories[tid];
-      for (const [type, count] of entries) {
-        for (let i = 0; i < count; i++) slot.units.push(makeUnit(type, owner));
-      }
-    }
-
-    // compute starting IPC: sum of owned land IPC values
-    const ipc = {};
-    for (const p of Object.keys(POWERS)) ipc[p] = 0;
-    for (const t of MAP) {
-      if (t.type !== "land") continue;
-      const o = territories[t.id].owner;
-      if (o && ipc[o] !== undefined) ipc[o] += (t.ipc || 0);
-    }
-
-    return {
-      version: "aalite-0.1",
-      round: 1,
-      turnIndex: 0,
-      phaseIndex: 0,
-      territories,
-      ipc,
-      purchases: { USSR: [], Germany: [], UK: [], Japan: [], USA: [] }, // [{type,count}]
-      vpMode: false,
-      vpJapan: 0,
-      victoryRule: "long", // long|short
-      battles: [],         // built after combat move
-      history: [],
-      selected: null,      // selected territory id
-      move: { source: null, pending: null }, // pending: {unitIds:[], mode:'move'|'load'|'unload'}
-    };
-  }
-
-  let S = defaultState();
-
-  // ---------- logging ----------
   function log(msg) {
-    const line = `[${nowHHMMSS()}] ${msg}`;
-    S.history.push(line);
-    const logEl = $("#log");
-    const div = document.createElement("div");
-    div.className = "line";
+    const time = new Date().toLocaleTimeString();
+    const line = `[${time}] ${msg}`;
+    state.log.push(line);
+    const el = document.getElementById('log');
+    const div = document.createElement('div');
+    div.className = 'line';
     div.textContent = line;
-    logEl.appendChild(div);
-    logEl.scrollTop = logEl.scrollHeight;
+    el.appendChild(div);
+    el.scrollTop = el.scrollHeight;
   }
 
-  function resetLogFromState() {
-    const logEl = $("#log");
-    logEl.innerHTML = "";
-    for (const line of S.history) {
-      const div = document.createElement("div");
-      div.className = "line";
-      div.textContent = line;
-      logEl.appendChild(div);
+  function setOwnershipFromMap() {
+    state.ownership = {};
+    Object.entries(AA.map.territories).forEach(([id, t]) => {
+      state.ownership[id] = t.owner || null;
+    });
+  }
+
+  function buildStacks() {
+    state.stacks = {};
+    Object.entries(AA.setup.stacks).forEach(([tid, perPower]) => {
+      state.stacks[tid] = deepCopy(perPower);
+    });
+    state.ipc = deepCopy(AA.setup.ipc);
+  }
+
+  function resetLog() {
+    state.log = [];
+    document.getElementById('log').innerHTML = '';
+  }
+
+  function polygonContains(pt, poly) {
+    let inside = false;
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+      const xi = poly[i][0], yi = poly[i][1];
+      const xj = poly[j][0], yj = poly[j][1];
+      const intersect = ((yi > pt.y) !== (yj > pt.y)) &&
+        (pt.x < (xj - xi) * (pt.y - yi) / (yj - yi + 1e-6) + xi);
+      if (intersect) inside = !inside;
     }
-    logEl.scrollTop = logEl.scrollHeight;
+    return inside;
   }
 
-  // ---------- rules / computations ----------
-  function currentPower() { return TURN_ORDER[S.turnIndex]; }
-  function currentPhase() { return PHASES[S.phaseIndex]; }
-
-  function friendlyToCurrent(owner) {
-    return owner && powerSide(owner) === powerSide(currentPower());
+  function screenToWorld(x, y) {
+    return {
+      x: (x - state.view.x) / state.view.scale,
+      y: (y - state.view.y) / state.view.scale,
+    };
   }
 
-  function computeIncome(power) {
-    let inc = 0;
-    for (const t of MAP) {
-      if (t.type !== "land") continue;
-      const o = S.territories[t.id].owner;
-      if (o === power) inc += (t.ipc || 0);
+  function drawTerritoryOutline(poly, color, lineWidth = 2, dash = []) {
+    ctx.save();
+    ctx.beginPath();
+    poly.forEach((p, idx) => {
+      if (idx === 0) ctx.moveTo(p[0], p[1]);
+      else ctx.lineTo(p[0], p[1]);
+    });
+    ctx.closePath();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = lineWidth;
+    ctx.setLineDash(dash);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function centerOfPolygon(poly) {
+    let x = 0, y = 0;
+    poly.forEach(p => { x += p[0]; y += p[1]; });
+    return { x: x / poly.length, y: y / poly.length };
+  }
+
+  function render() {
+    const { width, height } = canvas;
+    ctx.clearRect(0, 0, width, height);
+    ctx.save();
+    ctx.translate(state.view.x, state.view.y);
+    ctx.scale(state.view.scale, state.view.scale);
+
+    if (boardImg.complete) {
+      ctx.drawImage(boardImg, 0, 0, AA.map.width, AA.map.height);
     }
-    return inc;
-  }
 
-  function listFactories(power) {
-    return MAP
-      .filter(t => t.type === "land" && isFactory(t.id) && S.territories[t.id].owner === power)
-      .map(t => t.id);
-  }
-
-  function resetUnitsForNewTurn(power) {
-    for (const tid in S.territories) {
-      for (const u of S.territories[tid].units) {
-        if (u.owner === power) {
-          u.moved = 0;
-          u.from = null;
-          u.flags = {};
-        }
-        // cargo units (owned by someone) also reset only on their owner's turn
-        if (u.type === "trn" && u.cargo?.length) {
-          for (const cu of u.cargo) {
-            if (cu.owner === power) {
-              cu.moved = 0;
-              cu.from = null;
-              cu.flags = {};
-            }
-          }
-        }
+    Object.entries(AA.map.territories).forEach(([tid, t]) => {
+      const color = t.type === 'land' ? 'rgba(125, 211, 252, 0.6)' : 'rgba(148, 163, 184, 0.5)';
+      drawTerritoryOutline(t.polygon, color, 2);
+      if (state.selected === tid) {
+        drawTerritoryOutline(t.polygon, '#f59e0b', 4, [6, 6]);
       }
-    }
-  }
-
-  function unitMoveLeft(u) {
-    const st = UNIT_STATS[u.type];
-    return Math.max(0, (st.move || 0) - (u.moved || 0));
-  }
-
-  function isEnemyLand(tid, attackerPower) {
-    const t = territoryById(tid);
-    if (!t || t.type !== "land") return false;
-    const o = S.territories[tid].owner;
-    return o && powerSide(o) !== powerSide(attackerPower);
-  }
-
-  function hasEnemyUnits(tid, attackerPower) {
-    const units = S.territories[tid].units;
-    return units.some(u => powerSide(u.owner) !== powerSide(attackerPower));
-  }
-
-  function isHostileSpace(tid, attackerPower) {
-    return isEnemyLand(tid, attackerPower) || (isSea(tid) && hasEnemyUnits(tid, attackerPower));
-  }
-
-  function validateMove(u, fromId, toId, phase) {
-    const fromT = territoryById(fromId);
-    const toT = territoryById(toId);
-    if (!fromT || !toT) return { ok:false, why:"Unknown space." };
-
-    // adjacency (one step per click)
-    const neigh = fromT.neighbors || [];
-    if (!neigh.includes(toId)) return { ok:false, why:"Not adjacent." };
-
-    const st = UNIT_STATS[u.type];
-    if (!st) return { ok:false, why:"Unknown unit." };
-
-    if (unitMoveLeft(u) < 1) return { ok:false, why:"No movement left." };
-
-    // domain restrictions
-    if (st.domain === "land") {
-      if (toT.type !== "land") return { ok:false, why:"Land units can't enter sea." };
-    } else if (st.domain === "sea") {
-      if (toT.type !== "sea") return { ok:false, why:"Sea units can't enter land (use load/unload for transports)." };
-    } else if (st.domain === "air") {
-      // air can move anywhere (adjacent step)
-    }
-
-    // phase restrictions
-    if (phase === "Noncombat Move") {
-      // cannot enter hostile spaces
-      if (isHostileSpace(toId, currentPower())) return { ok:false, why:"Noncombat can't enter hostile spaces." };
-    }
-
-    if (phase === "Combat Move") {
-      // ok to enter hostile
-      // but cannot move allied units into a battle they don't own (lite simplification)
-      if (u.owner !== currentPower()) return { ok:false, why:"Combat moves: only the current power's units (Lite rule)." };
-    }
-
-    // stacking restrictions
-    // - In Combat Move, entering a hostile space is allowed (that's how attacks are declared).
-    // - Otherwise, stacks must be same-side.
-    const destUnits = S.territories[toId].units;
-    const enteringHostile = (phase === "Combat Move") && isHostileSpace(toId, currentPower());
-    if (!enteringHostile) {
-      for (const du of destUnits) {
-        if (!canShareSpace(du.owner, u.owner)) {
-          return { ok:false, why:"Can't stack with enemy units outside Combat Move." };
-        }
-      }
-    }
-
-    // Combat rule (Lite): once a unit enters a hostile space in Combat Move, it must stop.
-    if (phase === "Combat Move" && u.flags?.enteredHostile) {
-      return { ok:false, why:"This unit already entered a hostile space this phase." };
-    }
-
-    return { ok:true };
-  }
-
-  function moveUnit(u, fromId, toId, isCombatMove=false) {
-    const fromSlot = S.territories[fromId];
-    const toSlot = S.territories[toId];
-    fromSlot.units = fromSlot.units.filter(x => x.id !== u.id);
-
-    // mark origin for retreat + combat-entry stop rule
-    if (isCombatMove) {
-      u.from = fromId;
-      u.flags.combatMoved = true;
-      if (isHostileSpace(toId, currentPower())) {
-        u.flags.enteredHostile = true;
-      }
-    }
-
-    u.moved = (u.moved || 0) + 1;
-    toSlot.units.push(u);
-  }
-
-  function chooseAutoCasualties(units, hits) {
-    // Remove cheapest first; transports first; battleships take 2 hits.
-    // Returns array of unit ids to apply hits to in order.
-    const sorted = [...units].sort((a,b) => {
-      const sa = UNIT_STATS[a.type];
-      const sb = UNIT_STATS[b.type];
-      const ta = (a.type === "trn") ? -1 : 0;
-      const tb = (b.type === "trn") ? -1 : 0;
-      if (ta !== tb) return ta - tb;
-      const ca = sa?.cost ?? 999;
-      const cb = sb?.cost ?? 999;
-      if (ca !== cb) return ca - cb;
-      return (a.hp || 1) - (b.hp || 1);
     });
 
-    const picks = [];
-    let remaining = hits;
-    let i = 0;
-    while (remaining > 0 && i < sorted.length) {
-      picks.push(sorted[i].id);
-      remaining -= 1;
-      i += 1;
-    }
-    return picks;
+    // units summary circles
+    Object.entries(state.stacks).forEach(([tid, perPower]) => {
+      const t = AA.map.territories[tid];
+      if (!t) return;
+      const center = centerOfPolygon(t.polygon);
+      let offsetY = 0;
+      Object.entries(perPower).forEach(([power, units]) => {
+        const total = Object.values(units).reduce((a, b) => a + b, 0);
+        if (total <= 0) return;
+        ctx.save();
+        ctx.fillStyle = POWER_COLORS[power] || '#fff';
+        ctx.beginPath();
+        ctx.arc(center.x, center.y + offsetY, 18, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#0b0f14';
+        ctx.font = 'bold 14px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(total.toString(), center.x, center.y + offsetY);
+        ctx.restore();
+        offsetY += 26;
+      });
+    });
+
+    ctx.restore();
   }
 
-  function applyHitsAtLocation(tid, targetSide, hitCount, auto=true) {
-    // targetSide is "Axis" or "Allies" for coalition defense in this Lite mode.
-    const slot = S.territories[tid];
-    const candidates = slot.units.filter(u => powerSide(u.owner) === targetSide);
-    if (candidates.length === 0) return;
-
-    const ids = auto ? chooseAutoCasualties(candidates, hitCount) : chooseAutoCasualties(candidates, hitCount); // placeholder for manual
-    for (const uid of ids) {
-      const u = slot.units.find(x => x.id === uid);
-      if (!u) continue;
-      u.hp = (u.hp || 1) - 1;
-      if (u.hp <= 0) {
-        // sunk/killed — remove unit
-        slot.units = slot.units.filter(x => x.id !== uid);
-      }
-    }
-  }
-
-  function rollForSide(units, mode /* 'atk'|'def' */) {
-    const rolls = [];
-    let hits = 0;
-    for (const u of units) {
-      const st = UNIT_STATS[u.type];
-      if (!st) continue;
-      const target = (mode === "atk") ? st.atk : st.def;
-      if (!target || target <= 0) {
-        const r0 = die();
-        rolls.push({ unit:u, roll:r0, hit:false, target:target||0 });
-        continue;
-      }
-      const r = die();
-      const hit = r <= target;
-      if (hit) hits += 1;
-      rolls.push({ unit:u, roll:r, hit, target });
-    }
-    return { hits, rolls };
-  }
-
-  function resolveBattle(battle, autoCasualties=true) {
-    const tid = battle.tid;
-    const p = battle.attacker;
-    const attackerSide = powerSide(p);
-    const defenderSide = attackerSide === "Axis" ? "Allies" : "Axis";
-
-    const loc = S.territories[tid];
-    // Attacker units: current power's units that were marked combatMoved into this location this turn
-    const attackerUnits = loc.units.filter(u => u.owner === p && u.flags?.combatMoved);
-    // Defender: all opposite-side units
-    const defenderUnits = loc.units.filter(u => powerSide(u.owner) === defenderSide);
-
-    if (attackerUnits.length === 0 || defenderUnits.length === 0) return { done:true, note:"No battle." };
-
-    log(`Battle at ${territoryById(tid).name}: ${p} attacks (${attackerUnits.length}) vs ${defenderSide} defenders (${defenderUnits.length}).`);
-
-    let rounds = 0;
-    while (rounds < 20) {
-      rounds += 1;
-      const atk = rollForSide(attackerUnits, "atk");
-      const def = rollForSide(defenderUnits, "def");
-
-      const atkRollStr = atk.rolls.map(x => `${x.unit.type}:${x.roll}${x.hit?"✓":""}`).join(" ");
-      const defRollStr = def.rolls.map(x => `${x.unit.type}:${x.roll}${x.hit?"✓":""}`).join(" ");
-      log(`  Round ${rounds}: ATK hits=${atk.hits} [${atkRollStr}] | DEF hits=${def.hits} [${defRollStr}]`);
-
-      applyHitsAtLocation(tid, defenderSide, atk.hits, autoCasualties);
-      applyHitsAtLocation(tid, attackerSide, def.hits, autoCasualties);
-
-      // refresh unit arrays (they may have died)
-      const loc2 = S.territories[tid];
-      const attackerUnits2 = loc2.units.filter(u => u.owner === p && u.flags?.combatMoved);
-      const defenderUnits2 = loc2.units.filter(u => powerSide(u.owner) === defenderSide);
-
-      if (attackerUnits2.length === 0 && defenderUnits2.length === 0) {
-        log(`  Battle ends: mutual destruction at ${territoryById(tid).name}.`);
-        break;
-      }
-      if (defenderUnits2.length === 0) {
-        log(`  Battle ends: attacker wins at ${territoryById(tid).name}.`);
-        break;
-      }
-      if (attackerUnits2.length === 0) {
-        log(`  Battle ends: defender holds at ${territoryById(tid).name}.`);
-        break;
-      }
-
-      // In this Lite build, we don't prompt for retreat; attackers fight on.
-    }
-
-    // Capture if land and attacker has surviving LAND units (not air-only)
-    const t = territoryById(tid);
-    if (t.type === "land") {
-      const loc3 = S.territories[tid];
-      const attackerLand = loc3.units.filter(u => u.owner === p && UNIT_STATS[u.type].domain === "land");
-      const defenderAny = loc3.units.filter(u => powerSide(u.owner) !== powerSide(p));
-      if (defenderAny.length === 0 && attackerLand.length > 0) {
-        const prevOwner = loc3.owner;
-        loc3.owner = p;
-        log(`  Territory captured: ${t.name} now controlled by ${p} (was ${prevOwner ?? "None"}).`);
-      } else if (defenderAny.length === 0 && attackerLand.length === 0) {
-        log(`  No capture (air-only survivors) in ${t.name}.`);
-      }
-    }
-
-    // clear combatMoved flags for units in this battle location (so they don't keep "attacking")
-    const loc4 = S.territories[tid];
-    for (const u of loc4.units) {
-      if (u.owner === p) u.flags.combatMoved = false;
-    }
-
-    return { done:true };
-  }
-
-  function rebuildBattlesAfterCombatMove() {
-    const p = currentPower();
-    const battles = [];
-    for (const t of MAP) {
-      const loc = S.territories[t.id];
-      if (!loc.units.length) continue;
-      const hasAtk = loc.units.some(u => u.owner === p && u.flags?.combatMoved);
-      if (!hasAtk) continue;
-      const hasDef = loc.units.some(u => powerSide(u.owner) !== powerSide(p));
-      if (hasDef) battles.push({ tid: t.id, attacker: p });
-    }
-    S.battles = battles;
-    if (battles.length) log(`Combat Move complete: ${battles.length} battle(s) queued.`);
-  }
-
-
-  function applyAutoCapturesForEmptyEnemyTerritories() {
-    const p = currentPower();
-    for (const t of MAP) {
-      if (t.type !== "land") continue;
-      const loc = S.territories[t.id];
-      const owner = loc.owner;
-      if (!owner) continue;
-      if (powerSide(owner) === powerSide(p)) continue; // not enemy-controlled
-
-      const hasAtk = loc.units.some(u => u.owner === p && u.flags?.combatMoved);
-      if (!hasAtk) continue;
-
-      const hasDef = loc.units.some(u => powerSide(u.owner) !== powerSide(p));
-      if (hasDef) continue;
-
-      const attackerLand = loc.units.filter(u => u.owner === p && UNIT_STATS[u.type].domain === "land");
-      if (!attackerLand.length) continue;
-
-      const prevOwner = loc.owner;
-      loc.owner = p;
-      // clear combatMoved so they don't keep counting as "attacking"
-      for (const u of loc.units) if (u.owner === p) u.flags.combatMoved = false;
-      log(`Unopposed capture: ${t.name} now controlled by ${p} (was ${prevOwner}).`);
-    }
-  }
-
-
-  function enforceAirLanding() {
-    // Lite: if an air unit ends in enemy land, destroy it.
-    // If it ends in sea, require enough friendly carriers (each CV carries 2 fighters; bombers cannot land at sea).
-    const p = currentPower();
-    const side = powerSide(p);
-
-    // compute carrier capacity by sea zone
-    for (const t of MAP) {
-      const loc = S.territories[t.id];
-      if (!loc.units.length) continue;
-
-      const airHere = loc.units.filter(u => UNIT_STATS[u.type].domain === "air");
-      if (!airHere.length) continue;
-
-      if (t.type === "land") {
-        if (loc.owner && powerSide(loc.owner) !== side) {
-          // hostile land: destroy all air
-          for (const u of airHere) {
-            loc.units = loc.units.filter(x => x.id !== u.id);
-            log(`Air unit ${u.type} (${u.owner}) destroyed (cannot end turn in hostile territory: ${t.name}).`);
-          }
-        }
-      } else {
-        // sea
-        const bombers = airHere.filter(u => u.type === "bmb");
-        for (const u of bombers) {
-          loc.units = loc.units.filter(x => x.id !== u.id);
-          log(`Bomber (${u.owner}) destroyed (Lite rule: bombers cannot land at sea) in ${t.name}.`);
-        }
-        const fighters = loc.units.filter(u => u.type === "ftr");
-        if (fighters.length) {
-          const carriers = loc.units.filter(u => u.type === "cv" && powerSide(u.owner) === side);
-          const cap = carriers.reduce((a,c) => a + (UNIT_STATS[c.type].airCap||0), 0);
-          if (fighters.length > cap) {
-            const kill = fighters.length - cap;
-            // destroy extras (arbitrary)
-            const doomed = fighters.slice(0, kill);
-            for (const u of doomed) {
-              loc.units = loc.units.filter(x => x.id !== u.id);
-              log(`Fighter (${u.owner}) destroyed (no carrier capacity) in ${t.name}.`);
-            }
-          }
-        }
-      }
-    }
-  }
-
-  function checkVictoryIfAny(triggerPower) {
-    const rule = VICTORY_RULES[S.victoryRule];
-    const p = triggerPower;
-
-    // capital control helpers
-    const controls = (power, tid) => S.territories[tid].owner === power;
-
-    // Allies win check (at end of Japan turn for long rule)
-    if (rule.alliesWin.type === "capitals") {
-      if (p === "Japan") {
-        const ok = rule.alliesWin.mustHold.every(tid => powerSide(S.territories[tid].owner) === "Allies");
-        if (ok) return { winner:"Allies", reason:`Allies control required capitals (${rule.alliesWin.mustHold.join(", ")}).` };
-      }
-    }
-    if (rule.alliesWin.type === "capitalsAny1") {
-      if (p === "Japan") {
-        const ok = rule.alliesWin.enemyCapitals.some(tid => powerSide(S.territories[tid].owner) === "Allies");
-        if (ok) return { winner:"Allies", reason:`Allies captured an Axis capital.` };
-      }
-    }
-
-    // Axis win checks (at end of USA turn for 1941-style rule)
-    if (rule.axisWin.type === "capitalsAny2") {
-      if (p === "USA") {
-        const held = rule.axisWin.alliedCapitals.filter(tid => powerSide(S.territories[tid].owner) === "Axis");
-        if (held.length >= 2) return { winner:"Axis", reason:`Axis controls two Allied capitals (${held.join(", ")}).` };
-      }
-    }
-    if (rule.axisWin.type === "capitalsAny1") {
-      if (p === "USA") {
-        const ok = rule.axisWin.enemyCapitals.some(tid => powerSide(S.territories[tid].owner) === "Axis");
-        if (ok) return { winner:"Axis", reason:`Axis captured an Allied capital.` };
-      }
-    }
-
-    // Optional Pacific-style VP mode (Japan only, simplified):
-    // - Japan gains floor(income/10) VPs at end of its turn (turn-by-turn).
-    // - Japan wins if VP >= 22.
-    // - Allies win if Japan gains 0 VP on Japan turn (i.e., income <= 9).
-    if (S.vpMode && p === "Japan") {
-      if (S.vpJapan >= 22) return { winner:"Axis", reason:`Japan reached 22 victory points.` };
-      // We track last gain in S._lastJapanVPGain
-      if ((S._lastJapanVPGain || 0) === 0) return { winner:"Allies", reason:`Japan gained 0 VP this turn (income <= 9).` };
-    }
-
-    return null;
-  }
-
-  // ---------- UI: territory panel ----------
-  function renderTerritoryPanel(tid) {
-    const el = $("#panel-territory");
+  function updateTerritoryPanel(tid) {
+    const panel = document.getElementById('panel-territory');
     if (!tid) {
-      el.innerHTML = `<div class="muted">Click a territory on the map.</div>`;
+      panel.innerHTML = '<div class="muted">Click a territory on the map.</div>';
       return;
     }
-    const t = territoryById(tid);
-    const slot = S.territories[tid];
-    const owner = slot.owner || "—";
-    const units = slot.units;
-
-    const income = (t.type === "land") ? `${t.ipc} IPC` : "—";
-    const factory = (t.type === "land" && isFactory(tid)) ? "Yes" : "No";
-    const cap = t.capital ? `Capital of ${t.capital}` : "—";
-
-    el.innerHTML = `
-      <div class="kv">
-        <b>Name</b><div>${t.name}</div>
-        <b>Type</b><div>${t.type}</div>
-        <b>Owner</b><div>${owner}</div>
-        <b>Income</b><div>${income}</div>
-        <b>Factory</b><div>${factory}</div>
-        <b>Capital</b><div>${cap}</div>
-      </div>
-      <div class="units">
-        ${renderUnitsList(units)}
-      </div>
-      <div class="muted" style="margin-top:10px">
-        Neighbors: ${(t.neighbors||[]).map(n => territoryById(n)?.name || n).join(", ")}
-      </div>
+    const t = AA.map.territories[tid];
+    const owner = state.ownership[tid] || 'Neutral';
+    const neighbors = t.neighbors.map(n => AA.map.territories[n]?.name || n).join(', ');
+    const stack = state.stacks[tid] || {};
+    const units = Object.entries(stack).flatMap(([power, entries]) => {
+      return Object.entries(entries).map(([type, count]) => `${power} ${type}×${count}`);
+    }).join(', ');
+    panel.innerHTML = `
+      <div class="kv"><b>Name</b><div>${t.name}</div></div>
+      <div class="kv"><b>Type</b><div>${t.type}</div></div>
+      <div class="kv"><b>Owner</b><div>${owner}</div></div>
+      <div class="kv"><b>IPC</b><div>${t.ipc ?? 0}</div></div>
+      <div class="kv"><b>Neighbors</b><div>${neighbors || '—'}</div></div>
+      <div class="kv"><b>Units</b><div>${units || '—'}</div></div>
+      <div class="kv"><b>VC/Capital</b><div>${t.isVC ? 'VC' : ''} ${t.isCapital ? 'Capital' : ''}</div></div>
     `;
   }
 
-  function renderUnitsList(units) {
-    if (!units.length) return `<div class="muted">No units.</div>`;
-    const byOwner = groupBy(units, u => u.owner);
-    const rows = [];
-    for (const [owner, list] of byOwner.entries()) {
-      const byType = groupBy(list, u => u.type);
-      const parts = [];
-      for (const [type, tl] of byType.entries()) parts.push(`${type}×${tl.length}`);
-      rows.push(`
-        <div class="unit-row">
-          <div class="l"><span class="badge">${owner.slice(0,2).toUpperCase()}</span> <b>${owner}</b></div>
-          <div>${parts.join("  ")}</div>
-        </div>
-      `);
-    }
-    return rows.join("");
+  function updateHUD(tid) {
+    const t = tid ? AA.map.territories[tid] : null;
+    document.getElementById('hud-selected').textContent = t ? t.name : '—';
+    document.getElementById('hud-owner').textContent = t ? (state.ownership[tid] || 'Neutral') : '—';
+    document.getElementById('hud-ipc').textContent = t ? (t.ipc ?? 0) : '—';
+    document.getElementById('hud-neighbors').textContent = t ? t.neighbors.join(', ') : '—';
   }
 
-  // ---------- UI: purchase ----------
-  function renderPurchaseUI() {
-    const p = currentPower();
-    const phase = currentPhase();
-    const wrap = $("#purchase-ui");
-    if (phase !== "Purchase") {
-      wrap.innerHTML = `<div class="muted">Not in Purchase phase.</div>`;
-      return;
-    }
-    const funds = S.ipc[p];
-
-    const purch = Object.entries(UNIT_STATS)
-      .filter(([k, st]) => st.cost > 0)
-      .sort((a,b) => a[1].cost - b[1].cost);
-
-    const lines = purch.map(([type, st]) => {
-      return `
-        <div class="purch-item">
-          <div class="name">
-            <span class="badge">${type.toUpperCase()}</span>
-            <div>
-              <div><b>${st.name}</b> <span class="muted">(${type})</span></div>
-              <div class="small">Cost ${st.cost} • A${st.atk} D${st.def} • Move ${st.move} • ${st.domain}</div>
-            </div>
-          </div>
-          <input type="number" min="0" value="0" data-buy="${type}" />
-        </div>
-      `;
-    }).join("");
-
-    wrap.innerHTML = `
-      <div class="kv">
-        <b>Funds</b><div><span class="pill">${funds} IPC</span></div>
-        <b>Queue</b><div class="muted">${(S.purchases[p]||[]).map(x => `${x.type}×${x.count}`).join(", ") || "—"}</div>
-      </div>
-      <div class="purch-grid">${lines}</div>
-      <div style="display:flex; gap:8px; margin-top:10px; flex-wrap:wrap">
-        <button class="btn" id="btn-buy">Buy Selected</button>
-        <button class="btn" id="btn-clear-buy">Clear Queue</button>
-        <select id="sel-victory-rule" title="Victory condition preset">
-          <option value="long">Victory: ${VICTORY_RULES.long.name}</option>
-          <option value="short">Victory: ${VICTORY_RULES.short.name}</option>
-        </select>
-      </div>
-      <div class="muted" style="margin-top:8px">
-        Lite rule: purchases are placed during Mobilize in your <b>factory</b> territories (capitals only in this scenario).
-      </div>
-    `;
-
-    $("#sel-victory-rule").value = S.victoryRule;
-
-    $("#btn-buy").onclick = () => {
-      const inputs = [...wrap.querySelectorAll("input[data-buy]")];
-      const wants = inputs
-        .map(inp => ({ type: inp.dataset.buy, count: parseInt(inp.value || "0", 10) }))
-        .filter(x => x.count > 0);
-
-      let cost = 0;
-      for (const w of wants) cost += UNIT_STATS[w.type].cost * w.count;
-      if (cost > S.ipc[p]) {
-        log(`Purchase denied: need ${cost} IPC, have ${S.ipc[p]}.`);
-        return;
-      }
-
-      S.ipc[p] -= cost;
-      const q = S.purchases[p] || [];
-      for (const w of wants) {
-        const ex = q.find(x => x.type === w.type);
-        if (ex) ex.count += w.count;
-        else q.push({ type: w.type, count: w.count });
-      }
-      S.purchases[p] = q;
-      log(`${p} purchased ${wants.map(w => `${w.type}×${w.count}`).join(", ")} for ${cost} IPC.`);
-      renderPurchaseUI();
-      draw();
-      updateTopbar();
-    };
-
-    $("#btn-clear-buy").onclick = () => {
-      // Refund queue (Lite convenience)
-      const q = S.purchases[p] || [];
-      let refund = 0;
-      for (const it of q) refund += UNIT_STATS[it.type].cost * it.count;
-      S.ipc[p] += refund;
-      S.purchases[p] = [];
-      log(`${p} cleared purchase queue (refunded ${refund} IPC).`);
-      renderPurchaseUI();
-      draw();
-      updateTopbar();
-    };
-
-    $("#sel-victory-rule").onchange = (e) => {
-      S.victoryRule = e.target.value;
-      log(`Victory preset set: ${VICTORY_RULES[S.victoryRule].name}`);
-    };
+  function renderUnitReference() {
+    const panel = document.getElementById('panel-units');
+    const rows = Object.entries(AA.units).map(([id, st]) => {
+      const att = st.att ?? '—';
+      const def = st.def ?? '—';
+      const move = st.move ?? '—';
+      return `<div class="unit-card"><div class="name">${id}</div><div class="stats">Cost ${st.cost} • Att ${att} • Def ${def} • Move ${move}</div></div>`;
+    }).join('');
+    panel.innerHTML = `<div class="unit-ref">${rows}</div>`;
   }
 
-  // ---------- UI: dialogs ----------
-  const dlg = $("#dlg");
-  function showDialog(title, bodyHTML, actions /* [{label, cls, fn}] */) {
-    $("#dlg-title").textContent = title;
-    $("#dlg-body").innerHTML = bodyHTML;
-    const act = $("#dlg-actions");
-    act.innerHTML = "";
-    for (const a of actions) {
-      const b = document.createElement("button");
-      b.className = `btn ${a.cls || ""}`.trim();
-      b.textContent = a.label;
-      b.onclick = () => { try { a.fn?.(); } finally { dlg.close(); } };
-      act.appendChild(b);
-    }
+  function refreshPills() {
+    document.getElementById('pill-round').textContent = `Round: ${state.round}`;
+    document.getElementById('pill-power').textContent = `Power: ${AA.setup.turnOrder[state.powerIndex]}`;
+    document.getElementById('pill-phase').textContent = `Phase: ${PHASES[state.phaseIndex]}`;
+  }
+
+  function selectTerritory(tid) {
+    state.selected = tid;
+    updateTerritoryPanel(tid);
+    updateHUD(tid);
+    render();
+  }
+
+  function winnerOverlay(text) {
+    const dlg = document.getElementById('dlg');
+    document.getElementById('dlg-title').textContent = 'Victory';
+    document.getElementById('dlg-body').textContent = text;
+    const actions = document.getElementById('dlg-actions');
+    actions.innerHTML = '';
+    const btn = document.createElement('button');
+    btn.className = 'btn';
+    btn.textContent = 'Close';
+    btn.onclick = () => dlg.close();
+    actions.appendChild(btn);
     dlg.showModal();
   }
 
-  function promptUnitSelection(tid, mode /* move|load|unload */, cb /* (unitIds)=>void */) {
-    const p = currentPower();
-    const phase = currentPhase();
-    const loc = S.territories[tid];
-    const t = territoryById(tid);
+  function victoryCheck() {
+    if (!state.victoryMode) return;
+    const ownership = state.ownership;
+    const sideOf = (owner) => SIDE[owner] || 'Neutral';
+    const vcCounts = { Axis: 0, Allies: 0 };
+    Object.entries(AA.map.territories).forEach(([tid, t]) => {
+      if (!t.isVC) return;
+      const owner = ownership[tid];
+      const side = sideOf(owner);
+      if (side === 'Axis') vcCounts.Axis += 1;
+      if (side === 'Allies') vcCounts.Allies += 1;
+    });
 
-    let candidates = loc.units;
-
-    if (mode === "move") {
-      // In Combat Move, only current power's units (Lite simplification)
-      if (phase === "Combat Move") candidates = candidates.filter(u => u.owner === p);
-      // In Noncombat, allow current power + same side units (still hotseat; but keep simple)
-      if (phase === "Noncombat Move") candidates = candidates.filter(u => powerSide(u.owner) === powerSide(p));
-      // No purchases etc.
+    if (state.victoryMode === 'VC_STANDARD') {
+      if (vcCounts.Axis >= 9) winnerOverlay('Axis win (9 Victory Cities).');
+      if (vcCounts.Allies >= 10) winnerOverlay('Allies win (10 Victory Cities).');
+    } else if (state.victoryMode === 'VC_TOTAL') {
+      if (vcCounts.Axis >= 13) winnerOverlay('Axis win (13 Victory Cities).');
+      if (vcCounts.Allies >= 13) winnerOverlay('Allies win (13 Victory Cities).');
+    } else if (state.victoryMode === 'CAPITALS') {
+      const axisHold = ['us_east', 'uk', 'moscow'].every(id => sideOf(ownership[id]) === 'Axis');
+      const alliesHold = ['germany', 'japan'].every(id => sideOf(ownership[id]) === 'Allies');
+      if (axisHold) winnerOverlay('Axis win (capitals condition).');
+      if (alliesHold) winnerOverlay('Allies win (capitals condition).');
     }
+  }
 
-    if (mode === "load") {
-      // choose land units on this territory
-      candidates = candidates.filter(u => UNIT_STATS[u.type].domain === "land" && powerSide(u.owner) === powerSide(p));
+  function nextPhase() {
+    state.phaseIndex = (state.phaseIndex + 1) % PHASES.length;
+    if (state.phaseIndex === 0) {
+      // move to next power
+      state.powerIndex = (state.powerIndex + 1) % AA.setup.turnOrder.length;
+      if (state.powerIndex === 0) state.round += 1;
+      // victory evaluated at end of USA turn
+      if (AA.setup.turnOrder[(state.powerIndex - 1 + AA.setup.turnOrder.length) % AA.setup.turnOrder.length] === 'USA') {
+        victoryCheck();
+      }
     }
+    refreshPills();
+  }
 
-    if (candidates.length === 0) {
-      log(`No selectable units at ${t.name} for mode=${mode}.`);
-      return;
-    }
+  function setupInteractions() {
+    canvas.addEventListener('click', (ev) => {
+      const rect = canvas.getBoundingClientRect();
+      const pt = screenToWorld(ev.clientX - rect.left, ev.clientY - rect.top);
+      const hit = Object.entries(AA.map.territories).find(([tid, t]) => polygonContains(pt, t.polygon));
+      if (hit) selectTerritory(hit[0]);
+    });
 
-    const rows = candidates.map(u => {
-      const st = UNIT_STATS[u.type];
-      return `
-        <label style="display:flex; gap:10px; align-items:center; padding:6px 0">
-          <input type="checkbox" data-unit="${u.id}" />
-          <span class="badge">${u.type.toUpperCase()}</span>
-          <span><b>${st.name}</b> <span class="small">(${u.owner})</span></span>
-          <span class="small" style="margin-left:auto">Move left: ${unitMoveLeft(u)}</span>
-        </label>
+    let dragging = false;
+    let last = { x: 0, y: 0 };
+    canvas.addEventListener('mousedown', (ev) => { dragging = true; last = { x: ev.clientX, y: ev.clientY }; });
+    window.addEventListener('mouseup', () => dragging = false);
+    window.addEventListener('mousemove', (ev) => {
+      if (!dragging) return;
+      const dx = ev.clientX - last.x;
+      const dy = ev.clientY - last.y;
+      last = { x: ev.clientX, y: ev.clientY };
+      state.view.x += dx;
+      state.view.y += dy;
+      render();
+    });
+
+    canvas.addEventListener('wheel', (ev) => {
+      ev.preventDefault();
+      const scale = state.view.scale * (ev.deltaY < 0 ? 1.05 : 0.95);
+      state.view.scale = Math.max(0.1, Math.min(1.5, scale));
+      render();
+    }, { passive: false });
+
+    document.getElementById('btn-next-phase').addEventListener('click', () => {
+      if (!state.started) return;
+      nextPhase();
+      log(`Advanced to ${PHASES[state.phaseIndex]} for ${AA.setup.turnOrder[state.powerIndex]}`);
+    });
+
+    document.getElementById('btn-help').addEventListener('click', () => {
+      const dlg = document.getElementById('dlg');
+      document.getElementById('dlg-title').textContent = 'Quick Rules';
+      document.getElementById('dlg-body').innerHTML = `
+        <p>Phases: ${PHASES.join(' → ')}.</p>
+        <p>Victory evaluated at end of USA turn per selected mode.</p>
+        <p>Amphibious assaults and full combat engine are planned milestones.</p>
       `;
-    }).join("");
+      const actions = document.getElementById('dlg-actions');
+      actions.innerHTML = '';
+      const close = document.createElement('button');
+      close.className = 'btn';
+      close.textContent = 'Close';
+      close.onclick = () => dlg.close();
+      actions.appendChild(close);
+      dlg.showModal();
+    });
 
-    showDialog(
-      `Select Units — ${t.name}`,
-      `<div class="small">Mode: <b>${mode}</b> • Phase: <b>${phase}</b></div><hr/>${rows}`,
-      [
-        { label:"Cancel", cls:"", fn:()=>{} },
-        { label:"Select", cls:"", fn:() => {
-            const ids = [...$("#dlg-body").querySelectorAll("input[data-unit]:checked")]
-              .map(x => x.dataset.unit);
-            cb(ids);
-          }
-        },
-      ]
-    );
-  }
-
-  // ---------- actions: moves / transports ----------
-  function startMoveFrom(tid) {
-    S.move.source = tid;
-    S.move.pending = null;
-    $("#hud-source").textContent = territoryById(tid).name;
-    $("#hud-target").textContent = "—";
-  }
-
-  function startPendingMove(unitIds, mode) {
-    S.move.pending = { unitIds, mode };
-    $("#hud-tip").textContent = `Now click a destination for ${unitIds.length} unit(s).`;
-  }
-
-  function executePendingMove(toId) {
-    const phase = currentPhase();
-    const fromId = S.move.source;
-    if (!fromId || !S.move.pending) return;
-
-    const pending = S.move.pending;
-    const fromT = territoryById(fromId);
-    const toT = territoryById(toId);
-
-    // Apply for each unit
-    const fromSlot = S.territories[fromId];
-    const movedUnits = [];
-    for (const uid of pending.unitIds) {
-      const u = fromSlot.units.find(x => x.id === uid);
-      if (!u) continue;
-      const v = validateMove(u, fromId, toId, phase);
-      if (!v.ok) { log(`Move blocked: ${v.why}`); continue; }
-      moveUnit(u, fromId, toId, phase === "Combat Move");
-      movedUnits.push(u);
-    }
-
-    if (movedUnits.length) {
-      log(`${currentPower()} moved ${movedUnits.map(u=>u.type).join(", ")} from ${fromT.name} to ${toT.name}.`);
-    }
-
-    // If combat move into hostile, keep combatMoved flags; battles built when leaving Combat Move
-    // Clear move selection
-    S.move.pending = null;
-    $("#hud-target").textContent = territoryById(toId).name;
-    $("#hud-tip").textContent = "Move complete. Select more units or End Phase.";
-
-    renderTerritoryPanel(S.selected);
-    draw();
-    updateTopbar();
-  }
-
-  function findTransportAtSeaZone(seaId, side) {
-    const loc = S.territories[seaId];
-    return loc.units.filter(u => u.type === "trn" && powerSide(u.owner) === side);
-  }
-
-  function loadToTransport(landId, seaId, unitIds) {
-    const p = currentPower();
-    const side = powerSide(p);
-    const landT = territoryById(landId);
-    const seaT = territoryById(seaId);
-    const landSlot = S.territories[landId];
-    const seaSlot = S.territories[seaId];
-
-    // validate adjacency
-    if (!(landT.neighbors||[]).includes(seaId)) { log("Load blocked: not adjacent."); return; }
-    if (seaT.type !== "sea") { log("Load blocked: target is not sea."); return; }
-
-    const transports = findTransportAtSeaZone(seaId, side);
-    if (!transports.length) { log("Load blocked: no friendly transport in that sea zone."); return; }
-
-    // choose first transport with space
-    let tr = null;
-    for (const t of transports) {
-      const cap = UNIT_STATS[t.type].capacity || 0;
-      if ((t.cargo?.length || 0) < cap) { tr = t; break; }
-    }
-    if (!tr) { log("Load blocked: all transports full."); return; }
-
-    const canLoad = unitIds
-      .map(uid => landSlot.units.find(u => u.id === uid))
-      .filter(u => u && UNIT_STATS[u.type].domain === "land" && powerSide(u.owner) === side);
-
-    let loaded = 0;
-    for (const u of canLoad) {
-      const cap = UNIT_STATS[tr.type].capacity || 0;
-      if ((tr.cargo.length) >= cap) break;
-      landSlot.units = landSlot.units.filter(x => x.id !== u.id);
-      tr.cargo.push(u);
-      loaded += 1;
-    }
-
-    if (loaded) log(`${p} loaded ${loaded} unit(s) onto a transport in ${seaT.name}.`);
-    else log("Load: nothing loaded.");
-
-    draw(); renderTerritoryPanel(S.selected);
-  }
-
-  function unloadFromTransport(seaId, landId) {
-    const p = currentPower();
-    const side = powerSide(p);
-    const seaT = territoryById(seaId);
-    const landT = territoryById(landId);
-    const seaSlot = S.territories[seaId];
-    const landSlot = S.territories[landId];
-
-    if (!(seaT.neighbors||[]).includes(landId)) { log("Unload blocked: not adjacent."); return; }
-    if (landT.type !== "land") { log("Unload blocked: target is not land."); return; }
-
-    // pick first transport with cargo
-    const transports = seaSlot.units.filter(u => u.type === "trn" && powerSide(u.owner) === side && (u.cargo?.length||0) > 0);
-    if (!transports.length) { log("Unload blocked: no friendly loaded transport here."); return; }
-    const tr = transports[0];
-
-    // Noncombat: cannot unload into hostile land (Lite). Combat: allowed, triggers battle.
-    const phase = currentPhase();
-    if (phase === "Noncombat Move") {
-      if (isEnemyLand(landId, p)) { log("Unload blocked: cannot unload into hostile land in Noncombat."); return; }
-      if (hasEnemyUnits(landId, p)) { log("Unload blocked: enemy units present."); return; }
-    }
-
-    // Offload all cargo
-    const cargo = tr.cargo.splice(0, tr.cargo.length);
-    for (const u of cargo) {
-      // Offloaded units are considered "moved" if the transport moved; we ignore that for Lite.
-      landSlot.units.push(u);
-      // If unloading as combat into hostile, mark as combatMoved so the battle builder picks it up
-      if (phase === "Combat Move" && isHostileSpace(landId, p)) {
-        u.flags.combatMoved = true;
-        u.from = seaId;
+    document.getElementById('btn-start').addEventListener('click', () => {
+      const mode = document.getElementById('victory-mode').value;
+      if (!mode) {
+        alert('Select a victory mode to start.');
+        return;
       }
-    }
-
-    log(`${p} unloaded ${cargo.length} unit(s) from transport to ${landT.name}.`);
-
-    draw(); renderTerritoryPanel(S.selected);
+      state.victoryMode = mode;
+      state.started = true;
+      document.getElementById('start-overlay').classList.add('hidden');
+      resetLog();
+      log(`Game start. Victory mode: ${mode}.`);
+      refreshPills();
+      render();
+    });
   }
 
-  // ---------- phase transitions ----------
-  function endPhase() {
-    const p = currentPower();
-    const phase = currentPhase();
-
-    if (phase === "Combat Move") {
-      rebuildBattlesAfterCombatMove();
-      applyAutoCapturesForEmptyEnemyTerritories();
-    }
-
-    if (phase === "Conduct Combat") {
-      if (S.battles.length) {
-        log("You still have unresolved battles. Click 'Resolve Battles' or End Phase to auto-resolve.");
-        // Auto resolve all if user insists (advance anyway)
-        for (const b of [...S.battles]) resolveBattle(b, $("#chk-auto-casualties").checked);
-        S.battles = [];
-      }
-    }
-
-    if (phase === "Noncombat Move") {
-      enforceAirLanding();
-    }
-
-    if (phase === "Mobilize") {
-      // Place queued purchases if any
-      const q = S.purchases[p] || [];
-      if (q.length) {
-        const factories = listFactories(p);
-        if (!factories.length) {
-          log(`${p} has no factories to place new units. Purchases remain queued.`);
-        } else {
-          // auto place everything in first factory (capital), Lite convenience
-          const target = factories[0];
-          const slot = S.territories[target];
-          let placed = 0;
-          for (const it of q) {
-            for (let i = 0; i < it.count; i++) {
-              slot.units.push(makeUnit(it.type, p));
-              placed += 1;
-            }
-          }
-          S.purchases[p] = [];
-          log(`${p} mobilized ${placed} new unit(s) in ${territoryById(target).name}.`);
-        }
-      }
-    }
-
-    if (phase === "Collect Income") {
-      const inc = computeIncome(p);
-      S.ipc[p] += inc;
-      log(`${p} collects ${inc} IPC.`);
-
-      // VP mode (Japan only)
-      if (S.vpMode && p === "Japan") {
-        const gain = Math.floor(inc / 10);
-        S._lastJapanVPGain = gain;
-        S.vpJapan += gain;
-        log(`Japan VP gain this turn: ${gain} (total VP=${S.vpJapan}).`);
-      }
-
-      // Victory check after income (matches several variants' timing)
-      const v = checkVictoryIfAny(p);
-      if (v) {
-        showDialog(
-          `Game Over — ${v.winner} Win`,
-          `<div><b>${v.winner}</b> wins.</div><div class="small" style="margin-top:8px">${v.reason}</div>`,
-          [
-            { label:"OK", cls:"", fn:()=>{} },
-            { label:"Reset", cls:"danger", fn:()=>{ S = defaultState(); syncAll(); } },
-          ]
-        );
-        log(`GAME OVER: ${v.winner} wins. (${v.reason})`);
-      }
-
-      // next power
-      S.phaseIndex = 0;
-      S.turnIndex = (S.turnIndex + 1) % TURN_ORDER.length;
-      if (S.turnIndex === 0) S.round += 1;
-      resetUnitsForNewTurn(currentPower());
-      syncAll();
-      return;
-    }
-
-    // advance phase
-    S.phaseIndex = (S.phaseIndex + 1) % PHASES.length;
-    syncAll();
+  function initialOwnershipIpc() {
+    Object.entries(AA.map.territories).forEach(([tid, t]) => {
+      if (!state.ownership[tid]) return;
+      const owner = state.ownership[tid];
+      if (state.ipc[owner] === undefined) state.ipc[owner] = 0;
+      if (t.type === 'land') state.ipc[owner] += (t.ipc || 0);
+    });
   }
 
-  // ---------- battles UI ----------
-  function resolveAllBattles() {
-    const phase = currentPhase();
-    if (phase !== "Conduct Combat") {
-      log("Resolve Battles is intended for Conduct Combat phase.");
-    }
-    if (!S.battles.length) { log("No battles to resolve."); return; }
-
-    const auto = $("#chk-auto-casualties").checked;
-    for (const b of [...S.battles]) resolveBattle(b, auto);
-    S.battles = [];
-    log("All queued battles resolved.");
-    syncAll();
-  }
-
-  // ---------- rendering ----------
-  const canvas = $("#map");
-  const ctx = canvas.getContext("2d");
-
-  function draw() {
-    const w = canvas.width, h = canvas.height;
-    ctx.clearRect(0,0,w,h);
-
-    // background stars
-    ctx.globalAlpha = 0.25;
-    for (let i=0;i<120;i++){
-      const x = (Math.sin(i*999) * 0.5 + 0.5) * w;
-      const y = (Math.cos(i*777) * 0.5 + 0.5) * h;
-      ctx.fillStyle = "white";
-      ctx.fillRect(x,y,1,1);
-    }
-    ctx.globalAlpha = 1;
-
-    // draw territories
-    for (const t of MAP) {
-      const slot = S.territories[t.id];
-
-      // fill
-      if (t.type === "sea") {
-        ctx.fillStyle = "rgba(30, 58, 138, 0.22)";
-      } else {
-        const o = slot.owner;
-        if (o) {
-          const col = POWERS[o]?.color || "#475569";
-          ctx.fillStyle = col + "33";
-        } else {
-          ctx.fillStyle = "rgba(148,163,184,0.12)";
-        }
-      }
-
-      // border
-      ctx.strokeStyle = "rgba(148,163,184,0.35)";
-      ctx.lineWidth = 1;
-
-      roundRect(ctx, t.x, t.y, t.w, t.h, 14, true, true);
-
-      // selection highlight
-      if (S.selected === t.id) {
-        ctx.strokeStyle = "rgba(125,211,252,0.95)";
-        ctx.lineWidth = 2;
-        roundRect(ctx, t.x+1, t.y+1, t.w-2, t.h-2, 14, false, true);
-      }
-
-      // label
-      ctx.fillStyle = "rgba(226,232,240,0.9)";
-      ctx.font = "12px ui-sans-serif, system-ui";
-      ctx.fillText(t.name, t.x+10, t.y+18);
-
-      // IPC value for land
-      if (t.type === "land") {
-        ctx.fillStyle = "rgba(226,232,240,0.75)";
-        ctx.font = "11px ui-sans-serif, system-ui";
-        ctx.fillText(`IPC ${t.ipc}`, t.x+10, t.y+34);
-      }
-
-      // factory marker
-      if (t.type === "land" && isFactory(t.id)) {
-        ctx.fillStyle = "rgba(226,232,240,0.85)";
-        ctx.font = "11px ui-sans-serif, system-ui";
-        ctx.fillText("🏭", t.x + t.w - 26, t.y + 18);
-      }
-
-      // unit summary
-      const u = slot.units;
-      if (u.length) {
-        // quick stacked counts by owner (first 2 groups)
-        const by = groupBy(u, x => x.owner);
-        let y = t.y + t.h - 10;
-        let shown = 0;
-        for (const [owner, list] of by.entries()) {
-          const col = POWERS[owner]?.color || "#94a3b8";
-          ctx.fillStyle = col;
-          ctx.globalAlpha = 0.9;
-          ctx.fillRect(t.x+10, y-10, 10, 10);
-          ctx.globalAlpha = 1;
-          ctx.fillStyle = "rgba(226,232,240,0.85)";
-          ctx.font = "11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
-          ctx.fillText(`${owner}:${list.length}`, t.x+24, y-1);
-          y -= 14;
-          shown += 1;
-          if (shown >= 2) break;
-        }
-        if (u.length > 0 && by.size > 2) {
-          ctx.fillStyle = "rgba(226,232,240,0.7)";
-          ctx.font = "10px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
-          ctx.fillText(`+${by.size-2} sides`, t.x+10, t.y + t.h - 44);
-        }
-      }
-    }
-
-    // top-left status box
-    ctx.fillStyle = "rgba(2,6,23,0.65)";
-    ctx.strokeStyle = "rgba(148,163,184,0.25)";
-    roundRect(ctx, 14, 14, 330, 86, 14, true, true);
-    ctx.fillStyle = "rgba(226,232,240,0.9)";
-    ctx.font = "12px ui-sans-serif, system-ui";
-    ctx.fillText(`Power: ${currentPower()} (${powerSide(currentPower())})`, 26, 38);
-    ctx.fillText(`Phase: ${currentPhase()}`, 26, 56);
-    ctx.fillText(`Round: ${S.round}`, 26, 74);
-    if (S.vpMode) ctx.fillText(`VP (Japan): ${S.vpJapan}`, 26, 92);
-  }
-
-  function roundRect(ctx, x, y, w, h, r, fill, stroke) {
-    const rr = Math.min(r, w/2, h/2);
-    ctx.beginPath();
-    ctx.moveTo(x+rr, y);
-    ctx.arcTo(x+w, y, x+w, y+h, rr);
-    ctx.arcTo(x+w, y+h, x, y+h, rr);
-    ctx.arcTo(x, y+h, x, y, rr);
-    ctx.arcTo(x, y, x+w, y, rr);
-    ctx.closePath();
-    if (fill) ctx.fill();
-    if (stroke) ctx.stroke();
-  }
-
-  function pickTerritoryAt(px, py) {
-    for (let i=MAP.length-1;i>=0;i--){
-      const t = MAP[i];
-      if (px>=t.x && px<=t.x+t.w && py>=t.y && py<=t.y+t.h) return t.id;
-    }
-    return null;
-  }
-
-  // ---------- topbar / HUD ----------
-  function updateTopbar() {
-    const p = currentPower();
-    $("#pill-round").textContent = `Round: ${S.round}`;
-    $("#pill-power").textContent = `Power: ${p}`;
-    $("#pill-phase").textContent = `Phase: ${currentPhase()}`;
-    $("#pill-ipc").textContent = `IPC: ${S.ipc[p]}`;
-
-    $("#chk-vp-mode").checked = S.vpMode;
-  }
-
-  function syncHUD() {
-    $("#hud-source").textContent = S.move.source ? territoryById(S.move.source).name : "—";
-    $("#hud-target").textContent = "—";
-  }
-
-  // ---------- persistence ----------
-  function saveLocal() {
-    localStorage.setItem("aalite_state", JSON.stringify(S));
-    log("Saved to localStorage.");
-  }
-  function loadLocal() {
-    const raw = localStorage.getItem("aalite_state");
-    if (!raw) { log("No saved game found."); return; }
-    try {
-      S = JSON.parse(raw);
-      // defensive defaults
-      S.history = S.history || [];
-      log("Loaded from localStorage.");
-      syncAll(true);
-    } catch(e) {
-      log("Load failed: " + e.message);
-    }
-  }
-
-  function exportJSON() {
-    const blob = new Blob([JSON.stringify(S, null, 2)], { type:"application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "axis_and_allies_lite_save.json";
-    a.click();
-    URL.revokeObjectURL(url);
-    log("Exported JSON save.");
-  }
-
-  function importJSON() {
-    const inp = document.createElement("input");
-    inp.type = "file";
-    inp.accept = "application/json";
-    inp.onchange = () => {
-      const f = inp.files?.[0];
-      if (!f) return;
-      const r = new FileReader();
-      r.onload = () => {
-        try {
-          S = JSON.parse(r.result);
-          S.history = S.history || [];
-          log("Imported JSON save.");
-          syncAll(true);
-        } catch(e) {
-          log("Import failed: " + e.message);
-        }
-      };
-      r.readAsText(f);
+  function init() {
+    renderUnitReference();
+    setOwnershipFromMap();
+    buildStacks();
+    initialOwnershipIpc();
+    setupInteractions();
+    refreshPills();
+    boardImg.onload = () => {
+      AA.map.width = boardImg.naturalWidth;
+      AA.map.height = boardImg.naturalHeight;
+      render();
     };
-    inp.click();
+    if (boardImg.complete) {
+      AA.map.width = boardImg.naturalWidth;
+      AA.map.height = boardImg.naturalHeight;
+      render();
+    }
   }
 
-  // ---------- help ----------
-  function showHelp() {
-    showDialog(
-      "Quick Rules (Lite)",
-      `
-      <div>
-        <div><b>What this is:</b> a simplified, fan-made A&A-like hotseat game with an abstract map and a “core loop” of Purchase → Move → Combat → Place → Income.</div>
-        <hr/>
-        <div class="small">
-          <b>Turn phases:</b> ${PHASES.join(" → ")}.<br/>
-          <b>Movement:</b> set Mode=Move, click a source, pick units, then click a destination (one step per click).<br/>
-          <b>Combat:</b> in Combat Move you may enter hostile spaces; click <b>Resolve Battles</b> in Conduct Combat.<br/>
-          <b>Factories:</b> capitals have 🏭. Purchases auto-place to your first available factory in Mobilize (Lite convenience).<br/>
-          <b>Victory:</b> choose long/short preset in Purchase. (Long: Allies must hold Berlin+Tokyo at end of Japan turn; Axis must hold any two Allied capitals at end of USA turn.)<br/>
-          <b>Optional VP mode:</b> enable “Pacific-style VP mode” (Japan gains floor(income/10) VPs each Japan turn; end-of-turn win checks).<br/>
-        </div>
-        <hr/>
-        <div class="small">
-          <b>Deliberate simplifications:</b> no surprise strikes, no AA fire, no complex air return paths, no retreats UI. This keeps the code compact and hackable.
-        </div>
-      </div>
-      `,
-      [
-        { label:"Close", cls:"", fn:()=>{} },
-      ]
-    );
-  }
-
-  // ---------- events ----------
-  canvas.addEventListener("click", (ev) => {
-    const rect = canvas.getBoundingClientRect();
-    const x = (ev.clientX - rect.left) * (canvas.width / rect.width);
-    const y = (ev.clientY - rect.top) * (canvas.height / rect.height);
-    const tid = pickTerritoryAt(x, y);
-    if (!tid) return;
-
-    S.selected = tid;
-    renderTerritoryPanel(tid);
-
-    const mode = $("#mode").value;
-
-    if (mode === "select") {
-      // nothing else
-      draw();
-      return;
-    }
-
-    if (!S.move.source) {
-      startMoveFrom(tid);
-      $("#hud-tip").textContent = `Source selected. Choose units (click again or select another territory).`;
-      draw();
-      return;
-    }
-
-    // If source chosen and pending exists, treat click as destination for move/unload
-    if (S.move.pending) {
-      if (S.move.pending.mode === "move") {
-        executePendingMove(tid);
-      } else if (S.move.pending.mode === "load") {
-        // pending stores land unit ids; destination should be a sea zone adjacent to the land source
-        loadToTransport(S.move.source, tid, S.move.pending.unitIds);
-        S.move.pending = null;
-      }
-      draw();
-      return;
-    }
-
-    // Source chosen but no pending: depending on mode, prompt unit selection or unload.
-    if (mode === "move") {
-      const src = S.move.source;
-      promptUnitSelection(src, "move", (ids) => startPendingMove(ids, "move"));
-    } else if (mode === "load") {
-      const src = S.move.source; // should be land
-      if (!isLand(src)) { log("Load mode: source must be land."); return; }
-      promptUnitSelection(src, "load", (ids) => startPendingMove(ids, "load"));
-      $("#hud-tip").textContent = "Now click an adjacent sea zone with a friendly transport.";
-    } else if (mode === "unload") {
-      const src = S.move.source; // should be sea
-      if (!isSea(src)) { log("Unload mode: source must be sea."); return; }
-      unloadFromTransport(src, tid);
-    }
-
-    draw();
-  });
-
-  $("#mode").addEventListener("change", () => {
-    S.move.source = null;
-    S.move.pending = null;
-    syncHUD();
-    $("#hud-tip").textContent = "Mode changed. Click a territory to select source or inspect.";
-  });
-
-  $("#btn-end-phase").onclick = endPhase;
-  $("#btn-resolve").onclick = resolveAllBattles;
-  $("#btn-help").onclick = showHelp;
-
-  $("#chk-vp-mode").onchange = (e) => {
-    S.vpMode = !!e.target.checked;
-    log(`VP mode: ${S.vpMode ? "ON" : "OFF"}.`);
-    draw(); updateTopbar();
-  };
-
-  $("#btn-save").onclick = saveLocal;
-  $("#btn-load").onclick = loadLocal;
-  $("#btn-export").onclick = exportJSON;
-  $("#btn-import").onclick = importJSON;
-  $("#btn-reset").onclick = () => {
-    showDialog(
-      "Reset Game?",
-      `<div class="small">This will clear current state (local save remains unless you overwrite it).</div>`,
-      [
-        { label:"Cancel", cls:"", fn:()=>{} },
-        { label:"Reset", cls:"danger", fn:()=>{ S = defaultState(); syncAll(true); log("Game reset."); } },
-      ]
-    );
-  };
-
-  // ---------- sync ----------
-  function syncAll(rebuildLog=false) {
-    updateTopbar();
-    if (rebuildLog) resetLogFromState();
-    renderPurchaseUI();
-    renderTerritoryPanel(S.selected);
-    syncHUD();
-    draw();
-  }
-
-  // initial
-  log("Game initialized. Choose a territory to inspect, then play USSR → Germany → UK → Japan → USA.");
-  resetUnitsForNewTurn(currentPower());
-  syncAll(true);
-
+  init();
 })();
