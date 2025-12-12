@@ -35,7 +35,7 @@ body{
   background:rgba(17,24,38,0.65);
   font-size:12px;
 }
-.btn{
+.btn{ 
   cursor:pointer;
   padding:8px 10px;
   border-radius:10px;
@@ -44,6 +44,7 @@ body{
   color:var(--text);
   font-weight:600;
 }
+.btn.tiny{padding:4px 6px; font-size:11px}
 .btn:hover{border-color:#2f455f}
 .btn.danger{border-color:#4b1f1f; background:rgba(127,29,29,0.35); color:#fecaca}
 .btn.danger:hover{border-color:#7f1d1d}

@@ -377,48 +377,98 @@
     if (stroke) ctx.stroke();
   }
 
-  function pickTerritoryAt(px, py) {
-    for (let i=MAP.length-1;i>=0;i--){
-      const t = MAP[i];
-      if (px>=t.x && px<=t.x+t.w && py>=t.y && py<=t.y+t.h) return t.id;
-    }
-    return null;
-  }
-
-  // ---------- topbar / HUD ----------
-  function updateTopbar() {
-    const p = currentPower();
-    $("#pill-round").textContent = `Round: ${S.round}`;
-    $("#pill-power").textContent = `Power: ${p}`;
-    $("#pill-phase").textContent = `Phase: ${currentPhase()}`;
-    $("#pill-ipc").textContent = `IPC: ${S.ipc[p]}`;
-
-    $("#chk-vp-mode").checked = S.vpMode;
-  }
-
-  function syncHUD() {
-    $("#hud-source").textContent = S.move.source ? territoryById(S.move.source).name : "—";
-    $("#hud-target").textContent = "—";
-  }
-
-  // ---------- persistence ----------
-  function saveLocal() {
-    localStorage.setItem("aalite_state", JSON.stringify(S));
-    log("Saved to localStorage.");
-  }
-  function loadLocal() {
-    const raw = localStorage.getItem("aalite_state");
-    if (!raw) { log("No saved game found."); return; }
-    try {
-      S = JSON.parse(raw);
-      // defensive defaults
-      S.history = S.history || [];
-      log("Loaded from localStorage.");
-      syncAll(true);
-    } catch(e) {
-      log("Load failed: " + e.message);
+    if (state.victoryMode === 'VC_STANDARD') {
+      if (vcCounts.Axis >= 9) winnerOverlay('Axis win (9 Victory Cities).');
+      if (vcCounts.Allies >= 10) winnerOverlay('Allies win (10 Victory Cities).');
+    } else if (state.victoryMode === 'VC_TOTAL') {
+      if (vcCounts.Axis >= 13) winnerOverlay('Axis win (13 Victory Cities).');
+      if (vcCounts.Allies >= 13) winnerOverlay('Allies win (13 Victory Cities).');
+    } else if (state.victoryMode === 'CAPITALS') {
+      const axisHold = ['us_east', 'uk', 'moscow'].every(id => SIDE[ownership[id]] === 'Axis');
+      const alliesHold = ['germany', 'japan'].every(id => SIDE[ownership[id]] === 'Allies');
+      if (axisHold) winnerOverlay('Axis win (capitals condition).');
+      if (alliesHold) winnerOverlay('Allies win (capitals condition).');
     }
   }
+
+  function nextPhase() {
+    const phase = PHASES[state.phaseIndex];
+    if (phase === 'Collect Income') {
+      collectIncome(activePower());
+      if (activePower() === 'USA') victoryCheck();
+    }
+    state.phaseIndex = (state.phaseIndex + 1) % PHASES.length;
+    if (state.phaseIndex === 0) {
+      state.powerIndex = (state.powerIndex + 1) % AA.setup.turnOrder.length;
+      if (state.powerIndex === 0) state.round += 1;
+      log(`Turn passes to ${activePower()}.`);
+    }
+    refreshPills();
+    updateTerritoryPanel(state.selected);
+  }
+
+  function winnerOverlay(text) {
+    const dlg = document.getElementById('dlg');
+    document.getElementById('dlg-title').textContent = 'Victory';
+    document.getElementById('dlg-body').textContent = text;
+    const actions = document.getElementById('dlg-actions');
+    actions.innerHTML = '';
+    const btn = document.createElement('button'); btn.className = 'btn'; btn.textContent = 'Close'; btn.onclick = () => dlg.close(); actions.appendChild(btn);
+    dlg.showModal();
+  }
+
+  function saveGame() {
+    const payload = JSON.stringify(state);
+    localStorage.setItem(STORAGE_KEY, payload);
+    log('Game saved to localStorage.');
+  }
+
+  function loadGame() {
+    const payload = localStorage.getItem(STORAGE_KEY);
+    if (!payload) { alert('No saved game.'); return; }
+    const loaded = JSON.parse(payload);
+    Object.keys(state).forEach(k => delete state[k]);
+    Object.assign(state, loaded);
+    rng = makeRng(state.rngSeed);
+    refreshPills();
+    render();
+    updateTerritoryPanel(state.selected);
+    log('Game loaded from localStorage.');
+  }
+
+  function resetGame() {
+    const fresh = createInitialState();
+    Object.keys(state).forEach(k => delete state[k]);
+    Object.assign(state, fresh);
+    rng = makeRng(state.rngSeed);
+    document.getElementById('start-overlay').classList.remove('hidden');
+    document.getElementById('log').innerHTML = '';
+    render();
+    updateTerritoryPanel(null);
+    refreshPills();
+  }
+
+  function setupInteractions() {
+    canvas.addEventListener('click', (ev) => {
+      const rect = canvas.getBoundingClientRect();
+      const pt = screenToWorld(ev.clientX - rect.left, ev.clientY - rect.top);
+      const hit = Object.entries(AA.map.territories).find(([tid, t]) => polygonContains(pt, t.polygon));
+      if (hit) selectTerritory(hit[0]);
+    });
+
+    let dragging = false; let last = { x: 0, y: 0 };
+    canvas.addEventListener('mousedown', (ev) => { dragging = true; last = { x: ev.clientX, y: ev.clientY }; });
+    window.addEventListener('mouseup', () => dragging = false);
+    window.addEventListener('mousemove', (ev) => {
+      if (!dragging) return; const dx = ev.clientX - last.x; const dy = ev.clientY - last.y; last = { x: ev.clientX, y: ev.clientY }; state.view.x += dx; state.view.y += dy; render();
+    });
+    canvas.addEventListener('wheel', (ev) => { ev.preventDefault(); state.view.scale = Math.max(0.1, Math.min(1.5, state.view.scale * (ev.deltaY < 0 ? 1.05 : 0.95))); render(); }, { passive: false });
+
+    document.getElementById('btn-next-phase').addEventListener('click', () => {
+      if (!state.started) return;
+      nextPhase();
+      log(`Advanced to ${PHASES[state.phaseIndex]} for ${activePower()}.`);
+    });
 
   function initialOwnershipIpc() {
     Object.entries(AA.map.territories).forEach(([tid, t]) => {
